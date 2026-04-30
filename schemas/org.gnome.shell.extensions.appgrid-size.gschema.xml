@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.appgrid-size"
+    path="/org/gnome/shell/extensions/appgrid-size/">
+
+    <key type="b" name="use-presets">
+      <default>true</default>
+      <summary>Use preset sizes</summary>
+      <description>When enabled, choose from preset icon size + grid combinations. When disabled, customize manually.</description>
+    </key>
+
+    <key type="i" name="preset-level">
+      <default>1</default>
+      <range min="0" max="3"/>
+      <summary>Preset level</summary>
+      <description>0=Large(96px), 1=Medium(64px), 2=Small(48px), 3=Tiny(32px)</description>
+    </key>
+
+    <key type="i" name="custom-icon-size">
+      <default>64</default>
+      <range min="16" max="160"/>
+      <summary>Custom icon pixel size</summary>
+    </key>
+
+    <key type="i" name="custom-rows">
+      <default>6</default>
+      <range min="2" max="20"/>
+      <summary>Custom rows per page</summary>
+    </key>
+
+    <key type="i" name="custom-columns">
+      <default>9</default>
+      <range min="2" max="20"/>
+      <summary>Custom columns per page</summary>
+    </key>
+
+    <key type="i" name="custom-row-spacing">
+      <default>12</default>
+      <range min="0" max="200"/>
+      <summary>Custom row spacing between icon rows</summary>
+    </key>
+
+    <key type="i" name="custom-column-spacing">
+      <default>12</default>
+      <range min="0" max="200"/>
+      <summary>Custom column spacing between icon columns</summary>
+    </key>
+
+  </schema>
+</schemalist>

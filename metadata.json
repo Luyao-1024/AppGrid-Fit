@@ -1,0 +1,8 @@
+{
+  "uuid": "appgrid-size@luyao",
+  "name": "App Grid Icon Size",
+  "description": "Reduce App Grid icon size to show more apps per page",
+  "shell-version": ["50"],
+  "version": "1.0.0",
+  "settings-schema": "org.gnome.shell.extensions.appgrid-size"
+}
