@@ -30,12 +30,14 @@ A GNOME Shell 50 extension that lets you customize the App Grid layout — icon 
 
 ## Presets
 
-| Level | Icon Size | Grid | Apps/Page | Gap |
-|-------|-----------|------|-----------|-----|
-| Large | 96 px | 4×6 | 24 | 24 px |
-| Medium | 64 px | 6×9 | 54 | 18 px |
-| Small | 48 px | 8×12 | 96 | 14 px |
-| Tiny | 32 px | 12×16 | 192 | 10 px |
+Presets auto-fit to your screen — the rows/columns below are base recommendations, actual grid is calculated from your display size at runtime.
+
+| Level | Icon Size | Base Grid | Gap |
+|-------|-----------|-----------|-----|
+| Large | 96 px | 4×6 | 24 px |
+| Medium | 64 px | 6×9 | 18 px |
+| Small | 48 px | 8×12 | 14 px |
+| Tiny | 32 px | 12×16 | 10 px |
 
 ## Installation
 
