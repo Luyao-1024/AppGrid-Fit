@@ -10,6 +10,24 @@ A GNOME Shell 50 extension that lets you customize the App Grid layout — icon 
 - **Page consolidation**: Automatically fills pages to capacity, reducing empty pages
 - **Live reload**: Changes apply instantly, no shell restart needed (except first install)
 
+## Screenshots
+
+**App Grid — Large Icons**
+
+![Large Icons](images/large_icon.png)
+
+**App Grid — Medium**
+
+![Medium](images/medium.png)
+
+**Preferences — Preset Mode**
+
+![Preset Mode](images/preset.png)
+
+**Preferences — Custom Mode**
+
+![Custom Mode](images/custom.png)
+
 ## Presets
 
 | Level | Icon Size | Grid | Apps/Page | Gap |
