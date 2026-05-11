@@ -2,12 +2,22 @@ import Clutter from 'gi://Clutter';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const PRESETS = [
-    {iconSize: 96, rows: 4, columns: 6, gap: 24},
-    {iconSize: 64, rows: 6, columns: 9, gap: 18},
-    {iconSize: 48, rows: 8, columns: 12, gap: 14},
-    {iconSize: 32, rows: 12, columns: 16, gap: 10},
-];
+const DEFAULT_ICON_SIZE = 96;
+
+function recommendGrid(iconSize) {
+    const scale = DEFAULT_ICON_SIZE / iconSize;
+    const spacing = Math.round(12 / scale);
+    return {
+        rows: Math.max(2, Math.floor(6 * scale)),
+        columns: Math.max(2, Math.floor(9 * scale)),
+        gap: spacing,
+    };
+}
+
+const PRESETS = [96, 64, 48, 32].map(iconSize => ({
+    iconSize,
+    ...recommendGrid(iconSize),
+}));
 
 export default class AppGridSizeExtension extends Extension {
     enable() {
@@ -31,9 +41,15 @@ export default class AppGridSizeExtension extends Extension {
             'custom-row-spacing', 'custom-column-spacing'])
             this._sigIds.push(this._settings.connect(`changed::${key}`, cb));
         this._apply();
+        this._overviewShowId =
+            Main.overview.connect('showing', () => this._apply());
     }
 
     disable() {
+        if (this._overviewShowId) {
+            Main.overview.disconnect(this._overviewShowId);
+            this._overviewShowId = 0;
+        }
         if (this._sigIds) {
             for (const id of this._sigIds)
                 this._settings.disconnect(id);
@@ -117,8 +133,29 @@ export default class AppGridSizeExtension extends Extension {
         log('[appgrid-size] applying: iconSize=%d rows=%d cols=%d rowGap=%d colGap=%d',
             iconSize, rows, columns, rowGap, colGap);
 
+        if (this._settings.get_boolean('use-presets')) {
+            const alloc = new Clutter.ActorBox();
+            grid.get_allocation_box(alloc);
+            const boxW = alloc.x2 - alloc.x1;
+            const boxH = alloc.y2 - alloc.y1;
+            if (boxW > 0 && boxH > 0) {
+                const p = lm.page_padding;
+                const availW = boxW - p.left - p.right;
+                const availH = boxH - p.top - p.bottom;
+                const maxCols = Math.max(2, Math.floor((availW + colGap) / (iconSize + colGap)));
+                const maxRows = Math.max(2, Math.floor((availH + rowGap) / (iconSize + rowGap)));
+                columns = maxCols;
+                rows = maxRows;
+                log('[appgrid-size] auto-fit preset: %dx%d (avail %dx%d)',
+                    columns, rows, availW, availH);
+            }
+        }
+
         lm.fixed_icon_size = iconSize;
+        grid._currentMode = -1;
         grid.setGridModes([{rows, columns}]);
+        lm.rows_per_page = rows;
+        lm.columns_per_page = columns;
         lm.row_spacing = rowGap;
         lm.column_spacing = colGap;
         lm.max_row_spacing = -1;
@@ -163,6 +200,12 @@ export default class AppGridSizeExtension extends Extension {
             lm.max_row_spacing, lm.max_column_spacing,
             lm.page_valign, lm.page_halign);
 
+        if (this._consolidatePages(lm)) {
+            const appDisplay = this._getAppDisplay();
+            if (appDisplay)
+                try { appDisplay._savePages(); } catch (_e) {}
+        }
+
         this._applied = true;
         this._forceRelayout(grid);
     }
@@ -176,6 +219,40 @@ export default class AppGridSizeExtension extends Extension {
             return null;
         const appDisplay = controls.appDisplay;
         return appDisplay._grid ?? null;
+    }
+
+    _getAppDisplay() {
+        const overview = Main.overview;
+        if (!overview || !overview._overview)
+            return null;
+        const controls = overview._overview._controls;
+        if (!controls || !controls.appDisplay)
+            return null;
+        return controls.appDisplay;
+    }
+
+    _consolidatePages(lm) {
+        let modified = false;
+        let i = 0;
+        while (i + 1 < lm._pages.length) {
+            const itemsPerPage = lm.columns_per_page * lm.rows_per_page;
+            const nCurrent = lm._pages[i].visibleChildren.length;
+
+            if (nCurrent >= itemsPerPage) {
+                i++;
+                continue;
+            }
+
+            const nNext = lm._pages[i + 1]?.visibleChildren.length ?? 0;
+            if (nNext === 0) {
+                i++;
+                continue;
+            }
+
+            lm._fillItemVacancies(i);
+            modified = true;
+        }
+        return modified;
     }
 
     /* Reset cached page size so that adaptToSize() re-runs

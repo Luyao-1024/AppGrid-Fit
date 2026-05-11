@@ -5,23 +5,24 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 
 const DEFAULT_ICON_SIZE = 96;
 
-const PRESETS = [
-    {label: 'Large — 96px, 4×6 grid, gap 24px', iconSize: 96, rows: 4, columns: 6},
-    {label: 'Medium — 64px, 6×9 grid, gap 18px', iconSize: 64, rows: 6, columns: 9},
-    {label: 'Small — 48px, 8×12 grid, gap 14px', iconSize: 48, rows: 8, columns: 12},
-    {label: 'Tiny — 32px, 12×16 grid, gap 10px', iconSize: 32, rows: 12, columns: 16},
-];
-
 function recommendGrid(iconSize) {
     const scale = DEFAULT_ICON_SIZE / iconSize;
     const spacing = Math.round(12 / scale);
     return {
         rows: Math.max(2, Math.floor(6 * scale)),
         columns: Math.max(2, Math.floor(9 * scale)),
-        rowSpacing: spacing,
-        columnSpacing: spacing,
+        spacing,
     };
 }
+
+const PRESETS = [96, 64, 48, 32].map(iconSize => {
+    const {rows, columns} = recommendGrid(iconSize);
+    return {
+        iconSize,
+        rows,
+        columns,
+    };
+});
 
 export default class AppGridSizePrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -60,22 +61,41 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         });
         page.add(presetsGroup);
 
+        const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
+
         const model = new Gtk.StringList();
-        PRESETS.forEach(p => model.append(p.label));
+        PRESETS.forEach((p, i) => model.append(`${SIZE_NAMES[i]} — ${p.iconSize}px`));
 
         const comboRow = new Adw.ComboRow({
             title: 'Size',
             model,
         });
         comboRow.selected = settings.get_int('preset-level');
+
+        const presetInfo = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.START,
+            margin_top: 4,
+            css_classes: ['dim-label'],
+        });
+
+        const updatePresetInfo = () => {
+            const p = PRESETS[comboRow.selected];
+            presetInfo.label =
+                `${p.iconSize}px icons · ${p.rows}×${p.columns} grid · ${recommendGrid(p.iconSize).spacing}px gap · ${p.rows * p.columns} apps/page`;
+        };
         disconnectIds.push(
             settings.connect('changed::preset-level', () => {
                 comboRow.selected = settings.get_int('preset-level');
+                updatePresetInfo();
             }),
             comboRow.connect('notify::selected', () => {
                 settings.set_int('preset-level', comboRow.selected);
+                updatePresetInfo();
             }));
+        updatePresetInfo();
         presetsGroup.add(comboRow);
+        presetsGroup.add(presetInfo);
 
         /* ======== Custom group ======== */
         const customGroup = new Adw.PreferencesGroup({
