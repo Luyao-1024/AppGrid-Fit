@@ -1,129 +1,124 @@
-# AGENTS — appgrid-size@luyao
+# AGENTS — AppGrid Fit
 
-## What This Extension Does
-
-A GNOME Shell 50 extension that lets users resize the App Grid icons, change the row/column
-count per page, and set the pixel gap (spacing) between icons. Without the extension, the
-overview App Grid uses a 4×6 layout at 96 px icons with 12 px gaps — these values come from
-CSS (`_app-grid.scss`) and are loaded at runtime into `IconGridLayout` properties. This
-extension intercepts those properties and injects user-controlled values.
+GNOME Shell 50 extension that customizes App Grid layout: icon size, rows/columns per page,
+and spacing. The default overview uses a 4×6 grid at 96 px icons with 12 px gaps (from CSS
+`_app-grid.scss` → `IconGridLayout` properties). This extension overrides those properties
+with user-controlled values.
 
 ---
 
-## High-Level Architecture
+## Architecture
+
+### Object chain (how the extension finds the grid)
 
 ```
-GNOME Shell overview
-  Main.overview                                    (Overview, overview.js:108)
-    └─ ._overview / .overview                      (OverviewActor, overview.js:27)
-         └─ ._controls                             (ControlsManager, overviewControls.js:313)
-              └─ .appDisplay                       (AppDisplay instance, overviewControls.js:372)
-                   └─ ._grid                       (AppGrid, appDisplay.js:154)
-                        └─ .layout_manager          (IconGridLayout, iconGrid.js:311)
+Main.overview                          (Overview)
+  └─ ._overview                        (OverviewActor)
+       └─ ._controls                   (ControlsManager)
+            └─ .appDisplay             (AppDisplay)
+                 └─ ._grid             (AppGrid)
+                      └─ .layout_manager   (IconGridLayout)
 ```
 
 ### Class hierarchy
 
 ```
-Clutter.Actor
-  └─ St.Viewport
-       └─ IconGrid          (iconGrid.js:1164)
-            └─ AppGrid      (appDisplay.js:154)      ← the instance we override
+Clutter.Actor → St.Viewport → IconGrid → AppGrid   ← instance we override
 ```
 
-### How the extension hooks in
+### What the extension sets on `IconGridLayout`
 
-`extension.js:_findGrid()` walks the chain above at runtime to get the `AppGrid` instance.
-`_apply()` then directly sets **GObject properties** on `grid.layout_manager` (the
-`IconGridLayout` instance):
-
-| Property set | Default (CSS) | Extension behaviour |
+| Property | CSS Default | Extension Value |
 |---|---|---|
-| `fixed_icon_size` | `-1` (auto-size) | Set to user-chosen px value |
-| `setGridModes([{rows, cols}])` | `[8×3, 6×4, 4×6, 3×8]` | Single-element array → pins layout |
-| `row_spacing` | `12` (CSS `$base_padding*2`) | Set to user-chosen gap px |
-| `column_spacing` | `12` (CSS `$base_padding*2`) | Set to user-chosen gap px |
-| `max_row_spacing` | `36` (CSS `$base_padding*6`) | Set to `-1` (unconstrained) |
-| `max_column_spacing` | `36` (CSS `$base_padding*6`) | Set to `-1` (unconstrained) |
-| `page_valign` | `FILL` (0) | Set to `START` (1) — row spacing directly controls gap |
-| `page_halign` | `FILL` (0) | Set to `CENTER` (2) — icons centered horizontally |
+| `fixed_icon_size` | `-1` (auto) | User-chosen px |
+| `setGridModes()` | `[8×3, 6×4, 4×6, 3×8]` | Single-element array → pins layout |
+| `rows_per_page` | from grid mode | Same as `rows` |
+| `columns_per_page` | from grid mode | Same as `columns` |
+| `row_spacing` / `column_spacing` | `12` (`$base_padding*2`) | User gap |
+| `max_row_spacing` / `max_column_spacing` | `36` (`$base_padding*6`) | `-1` (unconstrained) |
+| `page_valign` | `FILL` (0) | `START` (1) — exact row gap |
+| `page_halign` | `FILL` (0) | `CENTER` (2) — centered horizontally |
 
-### How spacing is calculated (iconGrid.js:_calculateSpacing)
+---
 
-1. Compute `usedWidth = childSize × columns`, `usedHeight = childSize × rows`
-2. Baseline spacing: `columnSpacing × (cols-1)`, `rowSpacing × (rows-1)`
-3. Empty space = page dimensions − used space − baseline spacing − page padding
-4. Alignment determines final spacing:
+## Key Mechanisms
 
-| Alignment | hSpacing / vSpacing |
-|---|---|
-| `START` | `column_spacing` / `row_spacing` (exact user value) |
-| `CENTER` | `column_spacing` / `row_spacing` (icons centered) |
-| `END` | `column_spacing` / `row_spacing` (icons at bottom/right) |
-| `FILL` | `column_spacing + emptyHSpace/(cols-1)` / `row_spacing + emptyVSpace/(rows-1)` |
+### Auto-fit presets
 
-#### Why FILL alignment fails for spacing control
-
-In FILL alignment, the spacing formula expands:
+When preset mode is active, `_apply()` reads the grid's allocation box and computes the
+maximum rows/columns that physically fit:
 
 ```
-vSpacing = rowSpacing + (pageHeight - usedHeight - rowSpacing×(nRows-1) - paddingTop - paddingBottom) / (nRows-1)
-         = rowSpacing + (pageHeight - usedHeight - padding) / (nRows-1) - rowSpacing
-         = (pageHeight - usedHeight - padding) / (nRows-1)
+maxCols = floor((availW + colGap) / (iconSize + colGap))
+maxRows = floor((availH + rowGap) / (iconSize + rowGap))
 ```
 
-**`row_spacing` cancels out entirely.** Visual gap depends only on page height, icon size,
-row count and page padding — capped by `max_row_spacing`. Setting `row_spacing` alone has
-zero visual effect. Same for `column_spacing` horizontally.
+This overrides the preset's default rows/columns with screen-adaptive values.
 
-#### The fix: START valign + CENTER halign
+### Why START valign + CENTER halign
 
-- **`page_valign = START`**: `vSpacing = row_spacing` (exact). Icons start at
-  `pagePadding.top = 24px` from the top — no cut-off risk.
-- **`page_halign = CENTER`**: `hSpacing = column_spacing` (exact). Icons centered
-  horizontally with equal side margins.
+In FILL alignment, `_calculateSpacing` expands to:
 
-This combination guarantees exact user spacing in both directions, centers the grid
-left-to-right, and never clips the first row.
+```
+vSpacing = rowSpacing + (pageHeight - usedHeight - rowSpacing×(rows-1) - padding) / (rows-1)
+         = (pageHeight - usedHeight - padding) / (rows-1)
+```
 
-### Defending against CSS overrides
+`row_spacing` cancels out — visual gap depends only on page dimensions. Setting `page_valign
+= START` makes `vSpacing = row_spacing` (exact). `page_halign = CENTER` centers icons
+horizontally with exact `column_spacing`.
 
-`IconGrid.vfunc_style_changed()` (`iconGrid.js:1258`) resets `row_spacing`,
-`column_spacing`, `max_row_spacing`, and `max_column_spacing` from CSS each time it fires
-(theme switch, style change, etc.). The extension connects `notify::*` signal handlers on
-all six layout-manager properties. Whenever any property changes (including from CSS), the
-handler immediately restores the extension's value. This makes the extension resistant to
-style-change overrides.
+### CSS override defense
 
-### Force-relayout trick
+`IconGrid.vfunc_style_changed()` resets spacing properties from CSS on theme switches.
+The extension connects `notify::*` handlers on all six layout properties. When any property
+changes (including from CSS), the enforcer immediately restores the extension's value.
 
-1. Immediately set icon sizes on all children via `lm._container` (so `_getChildrenMaxSize`
-   returns new values before the next allocation — prevents CENTER alignment from
-   computing wrong offsets with old icon sizes).
-2. Reset `_pageWidth / _pageHeight` to 0 so `adaptToSize()` re-runs even if the allocation
-   box hasn't changed size.
+### Page consolidation
+
+`_consolidatePages()` walks `lm._pages` and calls `_fillItemVacancies()` to pull items from
+subsequent pages into earlier unfilled pages. This reduces empty pages when grid density
+increases. After consolidation, `appDisplay._savePages()` is called to persist the result.
+
+### Overview re-apply
+
+Connected to `Main.overview` `'showing'` signal so layout is re-applied each time the
+overview opens — handles cases where GNOME Shell resets layout between shows.
+
+### Force-relayout
+
+1. Set icon sizes on all children via `lm._container` so `_getChildrenMaxSize` returns
+   correct values before next allocation.
+2. Reset `_pageWidth / _pageHeight` to 0 so `adaptToSize()` re-runs.
 
 ---
 
 ## Presets
 
-Four preset levels. The `gap` value controls both `row_spacing` and `column_spacing`:
+Generated from `recommendGrid()` formula: `scale = 96/iconSize`, `rows = floor(6×scale)`,
+`cols = floor(9×scale)`, `gap = round(12/scale)`.
 
-| Level | Icon | Rows × Cols | Apps/page | Gap |
+| Level | Icon | Rows × Cols | Apps/Page | Gap |
 |-------|------|-------------|-----------|-----|
-| 0 (Large)  | 96 px | 4 × 6  | 24 | 24 px |
-| 1 (Medium) | 64 px | 6 × 9  | 54 | 18 px |
-| 2 (Small)  | 48 px | 8 × 12 | 96 | 14 px |
-| 3 (Tiny)   | 32 px | 12 × 16| 192| 10 px |
+| 0 (Large) | 96 px | 4 × 6 | 24 | 24 px |
+| 1 (Medium) | 64 px | 6 × 9 | 54 | 18 px |
+| 2 (Small) | 48 px | 8 × 12 | 96 | 14 px |
+| 3 (Tiny) | 32 px | 12 × 16 | 192 | 10 px |
 
-Custom mode auto-recommends rows/columns/spacing from: `scale = 96/iconSize`,
-`rows = floor(6×scale)`, `cols = floor(9×scale)`, `gap = round(12/scale)`.
+In extension.js, presets are defined as:
+
+```js
+const PRESETS = [96, 64, 48, 32].map(iconSize => ({
+    iconSize,
+    ...recommendGrid(iconSize),
+}));
+```
 
 ---
 
 ## GSettings Schema
 
-8 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+7 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
@@ -135,40 +130,17 @@ Custom mode auto-recommends rows/columns/spacing from: `scale = 96/iconSize`,
 | `custom-row-spacing` | int | `12` | 0–200 |
 | `custom-column-spacing` | int | `12` | 0–200 |
 
-When modifying the schema XML, **recompile before packaging**:
-```bash
-glib-compile-schemas schemas/
-```
+After modifying the schema XML, recompile: `glib-compile-schemas schemas/`
 
 ---
 
 ## Build / Install / Reload
 
-### The golden rule
-
-**Never copy files directly to `~/.local/share/gnome-shell/extensions/`.** Always use
-`gnome-extensions` tooling. A new install is not recognised until the shell restarts.
-
-### Step-by-step
-
 ```bash
-# 1. Compile schema (if changed)
-cd /path/to/appgrid-size@luyao
 glib-compile-schemas schemas/
-
-# 2. Package
-gnome-extensions pack --force /path/to/appgrid-size@luyao/
-
-# 3. Install (overwrites existing)
+gnome-extensions pack --force "$(pwd)"
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
-
-# 4. Reload GNOME Shell (required for new installs / schema changes)
-#    Alt+F2 → type "r" → Enter
-#    or log out / log in
-```
-
-After reload, enable:
-```bash
+# Alt+F2 → "r" → Enter (first install or schema changes)
 gnome-extensions enable appgrid-size@luyao
 ```
 
@@ -176,17 +148,13 @@ gnome-extensions enable appgrid-size@luyao
 
 ## Code Conventions
 
-- Indent: 4 spaces
-- GNOME Shell imports: `resource:///org/gnome/shell/…` URIs
-- GTK imports: `gi://Gtk`, `gi://Gio`, `gi://Adw`, `gi://Clutter`
-- GSettings bindings: `Gio.SettingsBindFlags.DEFAULT`
-- Extension class extends `Extension` (from `extensions/extension.js`)
-- Prefs class extends `ExtensionPreferences` (from `extensions/js/extensions/prefs.js`)
-- Signal cleanup: collect IDs in `this._sigIds[]` and `this._notifyIds[]`, disconnect in
-  `disable()`
-- Original values saved first in `enable()`, restored in `disable()` — makes enable/disable
-  idempotent
-- No comments unless the logic is non-obvious
+- 4-space indent, no semicolons
+- GNOME Shell imports: `resource:///org/gnome/shell/…`
+- GI imports: `gi://Clutter`, `gi://Gtk`, `gi://Adw`, `gi://Gio`
+- Extension class extends `Extension`; prefs extends `ExtensionPreferences`
+- Signal IDs collected in `this._sigIds[]` and `this._notifyIds[]`, disconnected in `disable()`
+- Original layout values saved on first `_apply()`, restored in `disable()`
+- No comments unless logic is non-obvious
 
 ---
 
@@ -194,38 +162,32 @@ gnome-extensions enable appgrid-size@luyao
 
 | File | Purpose |
 |------|---------|
-| `extension.js` | Enable/disable lifecycle, find the grid, override layout properties |
-| `prefs.js` | Adw preferences window: preset/custom mode, spin rows, auto-recommend |
+| `extension.js` | Enable/disable, find grid, override layout, auto-fit, consolidate pages |
+| `prefs.js` | Adw prefs window: preset combo + info label, custom spin rows, auto-recommend |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
-| `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml` | GSettings key definitions |
-| `schemas/gschemas.compiled` | Compiled binary schema (generated, do not edit) |
+| `schemas/…gschema.xml` | GSettings key definitions |
+| `schemas/gschemas.compiled` | Compiled schema (generated, do not edit) |
+| `README.md` | User-facing documentation |
 
 ---
 
-## Key Source References (GNOME Shell 50.1)
+## GNOME Shell 50 Source References
 
 - `js/ui/iconGrid.js` — `IconGridLayout` (GObject props, `_calculateSpacing`, `adaptToSize`,
   `vfunc_allocate`), `IconGrid` (`vfunc_style_changed`, `setGridModes`,
-  `_findBestModeForSize`)
-- `js/ui/appDisplay.js` — `AppGrid` subclass, `BaseAppView._createGrid()`
+  `_findBestModeForSize`, `_fillItemVacancies`)
+- `js/ui/appDisplay.js` — `AppGrid`, `BaseAppView._createGrid()`, `_savePages()`
 - `js/ui/overviewControls.js` — `ControlsManager` with `appDisplay` getter
 - `js/ui/overview.js` — `Overview` / `OverviewActor`
-- `data/theme/gnome-shell-sass/widgets/_app-grid.scss` — CSS spacing/padding defaults
-- `data/theme/gnome-shell-sass/_common.scss` — `$base_padding` (6 px)
+- `data/theme/gnome-shell-sass/widgets/_app-grid.scss` — CSS defaults
 
 ---
 
 ## Known Limitations
 
-1. **vfunc_style_changed resets spacing properties**: `IconGrid.vfunc_style_changed()`
-   resets `row_spacing`, `column_spacing`, `max_row_spacing`, `max_column_spacing` from
-   CSS. The extension's `notify` signal handlers guard against this, but `page_valign` and
-   `page_halign` are not reset by CSS — the hybrid START/CENTER alignment is persistent.
-
-2. **Fixed icon size bypasses fallback**: When `fixed_icon_size` is set, icons smaller than
-   the user's choice still render at the fixed size (no down-scaling), which may produce
-   clipped labels on very small rows.
-
-3. **GSettings changes during prefs open**: The auto-recommend callback fires on every
-   `changed::custom-icon-size`, which overwrites any manual row/col/spacing adjustments the
-   user may have made in the same prefs session.
+1. **`vfunc_style_changed` resets spacing**: Guarded by `notify` signal enforcers, but
+   `page_valign` / `page_halign` are not reset by CSS — START/CENTER persists after disable.
+2. **Fixed icon size clips labels**: Icons smaller than the chosen size still render at the
+   fixed size; very small icons may clip labels.
+3. **Auto-recommend overwrites manual edits**: The `changed::custom-icon-size` callback
+   overwrites manual row/col/spacing adjustments in the same prefs session.
