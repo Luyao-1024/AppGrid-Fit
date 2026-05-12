@@ -1,7 +1,7 @@
 # AGENTS — AppGrid Fit
 
 GNOME Shell 50 extension that customizes App Grid layout: icon size, rows/columns per page,
-and spacing. The default overview uses a 4×6 grid at 96 px icons with 12 px gaps (from CSS
+and spacing. The default overview uses a 4×6 grid at 96 px icons with 12 px gaps (from CSS
 `_app-grid.scss` → `IconGridLayout` properties). This extension overrides those properties
 with user-controlled values.
 
@@ -46,11 +46,13 @@ Clutter.Actor → St.Viewport → IconGrid → AppGrid   ← instance we overrid
 ### Auto-fit presets
 
 When preset mode is active, `_apply()` reads the grid's allocation box and computes the
-maximum rows/columns that physically fit:
+maximum rows/columns that physically fit. The cell size accounts for `.overview-tile`
+CSS padding (`padding: 12px` per side → `cellSize = iconSize + 24`):
 
 ```
-maxCols = floor((availW + colGap) / (iconSize + colGap))
-maxRows = floor((availH + rowGap) / (iconSize + rowGap))
+cellSize = iconSize + 24
+maxCols = floor((availW + colGap) / (cellSize + colGap))
+maxRows = floor((availH + rowGap) / (cellSize + rowGap))
 ```
 
 This overrides the preset's default rows/columns with screen-adaptive values.
@@ -100,10 +102,10 @@ Generated from `recommendGrid()` formula: `scale = 96/iconSize`, `rows = floor(6
 
 | Level | Icon | Rows × Cols | Apps/Page | Gap |
 |-------|------|-------------|-----------|-----|
-| 0 (Large) | 96 px | 4 × 6 | 24 | 24 px |
-| 1 (Medium) | 64 px | 6 × 9 | 54 | 18 px |
-| 2 (Small) | 48 px | 8 × 12 | 96 | 14 px |
-| 3 (Tiny) | 32 px | 12 × 16 | 192 | 10 px |
+| 0 (Large) | 96 px | 4 × 6 | 24 | 24 px |
+| 1 (Medium) | 64 px | 6 × 9 | 54 | 18 px |
+| 2 (Small) | 48 px | 8 × 12 | 96 | 14 px |
+| 3 (Tiny) | 32 px | 12 × 16 | 192 | 10 px |
 
 In extension.js, presets are defined as:
 
@@ -113,6 +115,69 @@ const PRESETS = [96, 64, 48, 32].map(iconSize => ({
     ...recommendGrid(iconSize),
 }));
 ```
+
+---
+
+## Preferences Window (prefs.js)
+
+### Layout
+
+The prefs window uses a horizontal `Gtk.Paned` (position 300) inside a single
+`Adw.PreferencesRow`. Default window size: 960×640.
+
+```
+Adw.PreferencesPage
+  └─ rootGroup (Adw.PreferencesGroup, no title)
+       └─ rootRow (Adw.PreferencesRow, non-activatable)
+            └─ Gtk.Paned (horizontal)
+                 ├─ leftScroll (Gtk.ScrolledWindow)
+                 │    └─ leftBox (Gtk.Box, vertical, margin 24/16)
+                 │         ├─ modeGroup   — "Use preset sizes" SwitchRow
+                 │         ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
+                 │         └─ customGroup  — 5 SpinRows + info label (visible when preset=false)
+                 └─ rightBox (Gtk.Box, vertical, margin 24/16)
+                      ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
+                      ├─ DrawingArea (Cairo grid preview, vexpand, css class 'card')
+                      └─ fitLabel   — grid/auto-fit stats
+```
+
+### Grid preview (DrawingArea)
+
+The right pane draws a scaled preview of the icon grid using Cairo (`set_draw_func`).
+
+**Icon area estimation** uses `estimateGridArea(monitorW, monitorH)`, which applies the
+GNOME Shell 50 layout formula from `docs/grid-allocation.md`:
+
+```
+panelH = 30,  workH = H - panelH
+spacing = round(workH × 0.02)
+searchH = 52,  dashH = 72,  miniWsH = round(workH × 0.15)
+appDspH = workH - searchH - dashH - 3×spacing - miniWsH
+pageH = appDspH - 16  (page indicators)
+indW = max(round(W × 0.10), 60)  (navigation arrows per side)
+iconAreaW = W - 2×(indW + 18)    (indicators + CSS page-padding)
+iconAreaH = pageH - 2×24         (CSS page-padding top/bottom)
+```
+
+**Visual elements:**
+- Dark background rectangle represents the estimated icon area
+- Blue rounded-rect cells for each icon (rows×columns)
+- Red cells for overflow (row >= fitRows || col >= fitCols)
+- Green dashed rectangle for auto-fit boundary (when different from configured grid)
+
+**Auto-fit** uses the same formula as `extension.js`, including tile padding:
+```
+cellSize = iconSize + 24  (.overview-tile padding: 12px per side)
+fitCols = floor((iconAreaW + colGap) / (cellSize + colGap))
+fitRows = floor((iconAreaH + rowGap) / (cellSize + rowGap))
+```
+
+In preset mode, the preview draws cells using auto-fit values (`fitRows×fitCols`),
+matching the extension's runtime behavior. In custom mode, it draws the user's
+configured `rows×columns` with overflow cells in red.
+
+**Monitor detection** reads `Gdk.Display.get_default().get_monitors().get_item(0).get_geometry()`
+with a fallback to 1920×1080.
 
 ---
 
@@ -150,9 +215,11 @@ gnome-extensions enable appgrid-size@luyao
 
 - 4-space indent, no semicolons
 - GNOME Shell imports: `resource:///org/gnome/shell/…`
-- GI imports: `gi://Clutter`, `gi://Gtk`, `gi://Adw`, `gi://Gio`
+- GI imports: `gi://Clutter`, `gi://Gtk`, `gi://Adw`, `gi://Gio`, `gi://Gdk`
 - Extension class extends `Extension`; prefs extends `ExtensionPreferences`
 - Signal IDs collected in `this._sigIds[]` and `this._notifyIds[]`, disconnected in `disable()`
+  - `_sigIds`: raw signal IDs from `settings.connect()`
+  - `_notifyIds`: objects `{layoutManager, signal}` from `lm.connect()`
 - Original layout values saved on first `_apply()`, restored in `disable()`
 - No comments unless logic is non-obvious
 
@@ -163,10 +230,11 @@ gnome-extensions enable appgrid-size@luyao
 | File | Purpose |
 |------|---------|
 | `extension.js` | Enable/disable, find grid, override layout, auto-fit, consolidate pages |
-| `prefs.js` | Adw prefs window: preset combo + info label, custom spin rows, auto-recommend |
+| `prefs.js` | Adw prefs window: Paned layout with controls (left) + Cairo grid preview (right) |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |
 | `schemas/gschemas.compiled` | Compiled schema (generated, do not edit) |
+| `docs/grid-allocation.md` | GNOME Shell 50 app grid layout allocation analysis (source code reference) |
 | `README.md` | User-facing documentation |
 
 ---
@@ -191,3 +259,7 @@ gnome-extensions enable appgrid-size@luyao
    fixed size; very small icons may clip labels.
 3. **Auto-recommend overwrites manual edits**: The `changed::custom-icon-size` callback
    overwrites manual row/col/spacing adjustments in the same prefs session.
+4. **Preview estimates fixed pixel values**: `estimateGridArea()` in `prefs.js` uses
+   hardcoded values for panel height (~30px), search bar (~52px), dash (~72px) etc. derived
+   from the source code analysis in `docs/grid-allocation.md`. These may differ across
+   themes, font sizes, or display scaling.

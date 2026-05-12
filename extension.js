@@ -134,20 +134,20 @@ export default class AppGridSizeExtension extends Extension {
             iconSize, rows, columns, rowGap, colGap);
 
         if (this._settings.get_boolean('use-presets')) {
-            const alloc = new Clutter.ActorBox();
-            grid.get_allocation_box(alloc);
+            const alloc = grid.get_allocation_box();
             const boxW = alloc.x2 - alloc.x1;
             const boxH = alloc.y2 - alloc.y1;
             if (boxW > 0 && boxH > 0) {
                 const p = lm.page_padding;
                 const availW = boxW - p.left - p.right;
                 const availH = boxH - p.top - p.bottom;
-                const maxCols = Math.max(2, Math.floor((availW + colGap) / (iconSize + colGap)));
-                const maxRows = Math.max(2, Math.floor((availH + rowGap) / (iconSize + rowGap)));
+                const cellSize = iconSize + 24;
+                const maxCols = Math.max(2, Math.floor((availW + colGap) / (cellSize + colGap)));
+                const maxRows = Math.max(2, Math.floor((availH + rowGap) / (cellSize + rowGap)));
                 columns = maxCols;
                 rows = maxRows;
-                log('[appgrid-size] auto-fit preset: %dx%d (avail %dx%d)',
-                    columns, rows, availW, availH);
+                log('[appgrid-size] auto-fit preset: %dx%d (avail %dx%d, cellSize=%d)',
+                    columns, rows, availW, availH, cellSize);
             }
         }
 
