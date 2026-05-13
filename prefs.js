@@ -5,50 +5,69 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const DEFAULT_ICON_SIZE = 96;
+const DEFAULT_GRID_ROWS = 6;
+const DEFAULT_GRID_COLUMNS = 9;
+const DEFAULT_GAP = 12;
+const TILE_PADDING = 24;
+const MIN_GRID_DIMENSION = 2;
+const EFFECTIVE_WIDTH_RATIO = 2 / 3;
+
+const SHELL_PANEL_H = 30;
+const SHELL_SEARCH_H = 52;
+const SHELL_DASH_H = 72;
+const SHELL_MINI_WS_RATIO = 0.15;
+const SHELL_SPACING_RATIO = 0.02;
+const SHELL_PAGE_IND_H = 16;
+const SHELL_IND_W_RATIO = 0.10;
+const SHELL_MIN_IND_W = 60;
+const SHELL_IND_PADDING = 18;
+const SHELL_PAGE_PAD = 24;
+
+const PREVIEW_PADDING = 8;
+const DOCK_ICON_COUNT = 5;
+
+const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
+
+const SETTINGS_KEYS = [
+    'use-presets', 'preset-level',
+    'custom-icon-size', 'custom-rows', 'custom-columns',
+    'custom-row-spacing', 'custom-column-spacing',
+];
 
 function recommendGrid(iconSize) {
     const scale = DEFAULT_ICON_SIZE / iconSize;
-    const spacing = Math.round(12 / scale);
+    const gap = Math.round(DEFAULT_GAP / scale);
     return {
-        rows: Math.max(2, Math.floor(6 * scale)),
-        columns: Math.max(2, Math.floor(9 * scale)),
-        spacing,
+        rows: Math.max(MIN_GRID_DIMENSION, Math.floor(DEFAULT_GRID_ROWS * scale)),
+        columns: Math.max(MIN_GRID_DIMENSION, Math.floor(DEFAULT_GRID_COLUMNS * scale)),
+        gap,
     };
 }
 
-const PRESETS = [96, 64, 48, 32].map(iconSize => {
-    const {rows, columns} = recommendGrid(iconSize);
-    return {
-        iconSize,
-        rows,
-        columns,
-    };
-});
+const PRESETS = [96, 64, 48, 32].map(iconSize => ({
+    iconSize,
+    ...recommendGrid(iconSize),
+}));
 
 function estimateGridArea(monitorW, monitorH) {
-    const panelH = 30;
-    const workH = monitorH - panelH;
-    const spacing = Math.round(workH * 0.02);
-    const searchH = 52;
-    const dashH = 72;
-    const miniWsH = Math.round(workH * 0.15);
-    const appDspH = workH - searchH - dashH - 3 * spacing - miniWsH;
-    const pageIndH = 16;
-    const pageW = monitorW;
-    const pageH = Math.max(100, appDspH - pageIndH);
-    const indW = Math.max(Math.round(monitorW * 0.10), 60);
-    const iconAreaW = Math.max(100, pageW - 2 * (indW + 18));
-    const iconAreaH = Math.max(100, pageH - 2 * 24);
-    const searchY = panelH;
-    const miniWsY = panelH + searchH + spacing;
+    const workH = monitorH - SHELL_PANEL_H;
+    const spacing = Math.round(workH * SHELL_SPACING_RATIO);
+    const miniWsH = Math.round(workH * SHELL_MINI_WS_RATIO);
+    const appDspH = workH - SHELL_SEARCH_H - SHELL_DASH_H - 3 * spacing - miniWsH;
+    const pageH = Math.max(100, appDspH - SHELL_PAGE_IND_H);
+    const indW = Math.max(Math.round(monitorW * SHELL_IND_W_RATIO), SHELL_MIN_IND_W);
+    const iconAreaW = Math.max(100, monitorW - 2 * (indW + SHELL_IND_PADDING));
+    const iconAreaH = Math.max(100, pageH - 2 * SHELL_PAGE_PAD);
+    const miniWsY = SHELL_PANEL_H + SHELL_SEARCH_H + spacing;
     const appDspY = miniWsY + miniWsH + spacing;
     const dashY = appDspY + appDspH + spacing;
     return {
-        pageW, pageH, iconAreaW, iconAreaH, indW,
-        panelH, spacing, searchH, dashH, miniWsH, appDspH,
-        searchY, appDspY, miniWsY, dashY,
-        iconAreaX: indW + 18,
-        iconAreaYPos: appDspY + 24,
+        iconAreaW, iconAreaH, indW,
+        panelH: SHELL_PANEL_H, spacing, searchH: SHELL_SEARCH_H,
+        dashH: SHELL_DASH_H, miniWsH, appDspH,
+        searchY: SHELL_PANEL_H, appDspY, miniWsY, dashY,
+        iconAreaX: indW + SHELL_IND_PADDING,
+        iconAreaYPos: appDspY + SHELL_PAGE_PAD,
     };
 }
 
@@ -66,19 +85,170 @@ function roundedRect(cr, x, y, w, h, r) {
     cr.closePath();
 }
 
+function drawPanelSection(cr, fx, fy, fW, panelH, sc) {
+    const panelHs = panelH * sc;
+    cr.setDash([3, 2], 0);
+    cr.setLineWidth(1);
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
+    cr.rectangle(fx, fy, fW, panelHs);
+    cr.stroke();
+    cr.setSourceRGBA(0, 0, 0, 0.4);
+    cr.fill();
+
+    cr.setSourceRGBA(0.5, 0.6, 0.7, 0.4);
+    const actH = Math.max(2, 10 * sc);
+    roundedRect(cr, fx + 10 * sc, fy + (panelHs - actH) / 2,
+        Math.max(4, 70 * sc), actH, Math.max(1, 3 * sc));
+    cr.fill();
+    cr.arc(fx + fW / 2, fy + panelHs / 2, Math.max(2, 4 * sc), 0, Math.PI * 2);
+    cr.fill();
+    const sysW = Math.max(4, 50 * sc);
+    roundedRect(cr, fx + fW - sysW - 10 * sc, fy + (panelHs - actH) / 2,
+        sysW, actH, Math.max(1, 3 * sc));
+    cr.fill();
+}
+
+function drawSearchSection(cr, fx, fW, sY, sH, sc) {
+    cr.setDash([3, 2], 0);
+    cr.setLineWidth(1);
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
+    cr.rectangle(fx, sY, fW, sH);
+    cr.stroke();
+    const pillH = Math.max(4, 30 * sc);
+    const pillW = Math.min(360 * sc, fW * 0.35);
+    cr.setSourceRGBA(0.5, 0.5, 0.55, 0.3);
+    roundedRect(cr, fx + (fW - pillW) / 2, sY + (sH - pillH) / 2,
+        pillW, pillH, pillH / 2);
+    cr.fill();
+}
+
+function drawMiniWsSection(cr, fx, fW, mwY, mwH, sc) {
+    cr.setDash([3, 2], 0);
+    cr.setLineWidth(1);
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
+    cr.rectangle(fx, mwY, fW, mwH);
+    cr.stroke();
+
+    const wsThumbW = Math.max(8, 120 * sc);
+    const wsThumbH = mwH * 0.6;
+    const wsGap = Math.max(2, 10 * sc);
+    const wsCount = Math.max(2, Math.min(4,
+        Math.floor((fW - 40 * sc) / (wsThumbW + wsGap))));
+    const wsTotalW = wsCount * wsThumbW + (wsCount - 1) * wsGap;
+    const wsStartX = fx + (fW - wsTotalW) / 2;
+    const wsStartY = mwY + (mwH - wsThumbH) / 2;
+    cr.setSourceRGBA(0.5, 0.5, 0.55, 0.25);
+    for (let i = 0; i < wsCount; i++) {
+        roundedRect(cr, wsStartX + i * (wsThumbW + wsGap), wsStartY,
+            wsThumbW, wsThumbH, Math.max(1, 3 * sc));
+        cr.fill();
+    }
+}
+
+function drawGridSection(cr, iaX, iaY, iaW, iaH,
+    drawRows, drawCols, fitRows, fitCols,
+    cellW, cellH, gapW, gapH, sc, usePresets) {
+    const gridW = drawCols * cellW + Math.max(0, drawCols - 1) * gapW;
+    const gridH = drawRows * cellH + Math.max(0, drawRows - 1) * gapH;
+    const gx = iaX + (iaW - gridW) / 2;
+    const gy = iaY + (iaH - gridH) / 2;
+
+    for (let row = 0; row < drawRows; row++) {
+        for (let col = 0; col < drawCols; col++) {
+            const overflow = !usePresets && (row >= fitRows || col >= fitCols);
+            cr.setSourceRGBA(
+                overflow ? 0.85 : 0.35,
+                overflow ? 0.30 : 0.55,
+                overflow ? 0.30 : 0.85,
+                overflow ? 0.45 : 0.65);
+            roundedRect(cr,
+                gx + col * (cellW + gapW),
+                gy + row * (cellH + gapH),
+                cellW, cellH, Math.max(1, 3 * sc));
+            cr.fill();
+        }
+    }
+
+    if (!usePresets && (fitRows !== drawRows || fitCols !== drawCols)) {
+        const afW = fitCols * cellW + Math.max(0, fitCols - 1) * gapW;
+        const afH = fitRows * cellH + Math.max(0, fitRows - 1) * gapH;
+        cr.setSourceRGBA(0.3, 0.8, 0.4, 0.6);
+        cr.setLineWidth(1.5);
+        cr.setDash([4, 3], 0);
+        cr.rectangle(
+            iaX + (iaW - afW) / 2 - 2,
+            iaY + (iaH - afH) / 2 - 2,
+            afW + 4, afH + 4);
+        cr.stroke();
+    }
+}
+
+function drawDashSection(cr, fx, fW, dY, dH, sc) {
+    cr.setDash([3, 2], 0);
+    cr.setLineWidth(1);
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
+    cr.rectangle(fx, dY, fW, dH);
+    cr.stroke();
+    cr.setSourceRGBA(0, 0, 0, 0.35);
+    cr.fill();
+
+    const dockIc = Math.max(4, 46 * sc);
+    const dockGap = Math.max(2, 8 * sc);
+    const dockTW = DOCK_ICON_COUNT * dockIc + (DOCK_ICON_COUNT - 1) * dockGap;
+    const dockSX = fx + (fW - dockTW) / 2;
+    const dockSY = dY + (dH - dockIc) / 2;
+    cr.setSourceRGBA(0.45, 0.55, 0.65, 0.35);
+    for (let i = 0; i < DOCK_ICON_COUNT; i++) {
+        roundedRect(cr, dockSX + i * (dockIc + dockGap), dockSY,
+            dockIc, dockIc, Math.max(1, 6 * sc));
+        cr.fill();
+    }
+}
+
+function createSpinRow(settings, key, title, {lower, upper, step, page}) {
+    const row = new Adw.SpinRow({
+        title,
+        adjustment: new Gtk.Adjustment({
+            lower, upper, step_increment: step, page_increment: page,
+        }),
+        value: settings.get_int(key),
+    });
+    settings.bind(key, row, 'value', Gio.SettingsBindFlags.DEFAULT);
+    return row;
+}
+
+function readGridConfig(settings) {
+    if (settings.get_boolean('use-presets')) {
+        const preset = PRESETS[settings.get_int('preset-level')];
+        return {
+            iconSize: preset.iconSize,
+            rows: preset.rows,
+            columns: preset.columns,
+            rowGap: preset.gap,
+            colGap: preset.gap,
+            usePresets: true,
+        };
+    }
+    return {
+        iconSize: settings.get_int('custom-icon-size'),
+        rows: settings.get_int('custom-rows'),
+        columns: settings.get_int('custom-columns'),
+        rowGap: settings.get_int('custom-row-spacing'),
+        colGap: settings.get_int('custom-column-spacing'),
+        usePresets: false,
+    };
+}
+
 export default class AppGridSizePrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
         const disconnectIds = [];
-
         const cleanupFns = [];
-        const cleanup = () => {
-            for (const id of disconnectIds)
-                settings.disconnect(id);
-            for (const fn of cleanupFns)
-                fn();
-        };
-        window.connect('close-request', cleanup);
+
+        window.connect('close-request', () => {
+            for (const id of disconnectIds) settings.disconnect(id);
+            for (const fn of cleanupFns) fn();
+        });
         window.set_default_size(1200, 600);
 
         const page = new Adw.PreferencesPage({
@@ -102,14 +272,28 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             shrink_end_child: false,
         });
 
-        /* ======== Left: Controls ======== */
+        const {widget: leftScroll, disconnectIds: ctrlIds} =
+            this._buildControlsPane(settings);
+        disconnectIds.push(...ctrlIds);
+
+        const {widget: rightBox, cleanupFns: prevFns} =
+            this._buildPreviewPane(settings);
+        cleanupFns.push(...prevFns);
+
+        paned.set_start_child(leftScroll);
+        paned.set_end_child(rightBox);
+        rootRow.set_child(paned);
+        rootGroup.add(rootRow);
+    }
+
+    _buildControlsPane(settings) {
+        const disconnectIds = [];
+
         const leftBox = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
-            margin_top: 16,
-            margin_bottom: 16,
-            margin_start: 24,
-            margin_end: 24,
+            margin_top: 16, margin_bottom: 16,
+            margin_start: 24, margin_end: 24,
         });
 
         const leftScroll = new Gtk.ScrolledWindow({
@@ -133,15 +317,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             description: 'Pick a ready-made combination',
         });
 
-        const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
-
         const model = new Gtk.StringList();
-        PRESETS.forEach((p, i) => model.append(`${SIZE_NAMES[i]} — ${p.iconSize}px`));
+        PRESETS.forEach((p, i) =>
+            model.append(`${SIZE_NAMES[i]} — ${p.iconSize}px`));
 
-        const comboRow = new Adw.ComboRow({
-            title: 'Size',
-            model,
-        });
+        const comboRow = new Adw.ComboRow({title: 'Size', model});
         comboRow.selected = settings.get_int('preset-level');
 
         const presetInfo = new Gtk.Label({
@@ -150,7 +330,6 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             margin_top: 4,
             css_classes: ['dim-label'],
         });
-
         const presetInfoRow = new Adw.PreferencesRow({
             activatable: false,
             selectable: false,
@@ -160,7 +339,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const updatePresetInfo = () => {
             const p = PRESETS[comboRow.selected];
             presetInfo.label =
-                `${p.iconSize}px icons · ${p.rows}×${p.columns} grid · ${recommendGrid(p.iconSize).spacing}px gap · ${p.rows * p.columns} apps/page`;
+                `${p.iconSize}px icons · ${p.rows}×${p.columns} grid · ${p.gap}px gap · ${p.rows * p.columns} apps/page`;
         };
         disconnectIds.push(
             settings.connect('changed::preset-level', () => {
@@ -181,50 +360,16 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             description: 'Adjust manually — rows/columns and spacing auto-suggest on icon size change',
         });
 
-        const iconAdjustment = new Gtk.Adjustment({
-            lower: 16, upper: 160, step_increment: 8, page_increment: 16,
-        });
-        const iconRow = new Adw.SpinRow({
-            title: 'Icon pixel size',
-            adjustment: iconAdjustment,
-            value: settings.get_int('custom-icon-size'),
-        });
-
-        const rowsAdjustment = new Gtk.Adjustment({
-            lower: 2, upper: 20, step_increment: 1, page_increment: 2,
-        });
-        const rowsRow = new Adw.SpinRow({
-            title: 'Rows per page',
-            adjustment: rowsAdjustment,
-            value: settings.get_int('custom-rows'),
-        });
-
-        const columnsAdjustment = new Gtk.Adjustment({
-            lower: 2, upper: 20, step_increment: 1, page_increment: 2,
-        });
-        const columnsRow = new Adw.SpinRow({
-            title: 'Columns per page',
-            adjustment: columnsAdjustment,
-            value: settings.get_int('custom-columns'),
-        });
-
-        const rowSpacingAdjustment = new Gtk.Adjustment({
-            lower: 0, upper: 200, step_increment: 2, page_increment: 8,
-        });
-        const rowSpacingRow = new Adw.SpinRow({
-            title: 'Row spacing (px)',
-            adjustment: rowSpacingAdjustment,
-            value: settings.get_int('custom-row-spacing'),
-        });
-
-        const columnSpacingAdjustment = new Gtk.Adjustment({
-            lower: 0, upper: 200, step_increment: 2, page_increment: 8,
-        });
-        const columnSpacingRow = new Adw.SpinRow({
-            title: 'Column spacing (px)',
-            adjustment: columnSpacingAdjustment,
-            value: settings.get_int('custom-column-spacing'),
-        });
+        customGroup.add(createSpinRow(settings, 'custom-icon-size',
+            'Icon pixel size', {lower: 16, upper: 160, step: 8, page: 16}));
+        customGroup.add(createSpinRow(settings, 'custom-rows',
+            'Rows per page', {lower: 2, upper: 20, step: 1, page: 2}));
+        customGroup.add(createSpinRow(settings, 'custom-columns',
+            'Columns per page', {lower: 2, upper: 20, step: 1, page: 2}));
+        customGroup.add(createSpinRow(settings, 'custom-row-spacing',
+            'Row spacing (px)', {lower: 0, upper: 200, step: 2, page: 8}));
+        customGroup.add(createSpinRow(settings, 'custom-column-spacing',
+            'Column spacing (px)', {lower: 0, upper: 200, step: 2, page: 8}));
 
         const infoLabel = new Gtk.Label({
             label: '',
@@ -232,29 +377,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             margin_top: 4,
             css_classes: ['dim-label'],
         });
-
         const infoRow = new Adw.PreferencesRow({
             activatable: false,
             selectable: false,
         });
         infoRow.set_child(infoLabel);
-
-        settings.bind('custom-icon-size', iconRow, 'value',
-            Gio.SettingsBindFlags.DEFAULT);
-        settings.bind('custom-rows', rowsRow, 'value',
-            Gio.SettingsBindFlags.DEFAULT);
-        settings.bind('custom-columns', columnsRow, 'value',
-            Gio.SettingsBindFlags.DEFAULT);
-        settings.bind('custom-row-spacing', rowSpacingRow, 'value',
-            Gio.SettingsBindFlags.DEFAULT);
-        settings.bind('custom-column-spacing', columnSpacingRow, 'value',
-            Gio.SettingsBindFlags.DEFAULT);
-
-        customGroup.add(iconRow);
-        customGroup.add(rowsRow);
-        customGroup.add(columnsRow);
-        customGroup.add(rowSpacingRow);
-        customGroup.add(columnSpacingRow);
         customGroup.add(infoRow);
         leftBox.append(customGroup);
 
@@ -269,12 +396,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         disconnectIds.push(
             settings.connect('changed::custom-icon-size', () => {
-                const size = settings.get_int('custom-icon-size');
-                const rec = recommendGrid(size);
+                const rec = recommendGrid(settings.get_int('custom-icon-size'));
                 settings.set_int('custom-rows', rec.rows);
                 settings.set_int('custom-columns', rec.columns);
-                settings.set_int('custom-row-spacing', rec.spacing);
-                settings.set_int('custom-column-spacing', rec.spacing);
+                settings.set_int('custom-row-spacing', rec.gap);
+                settings.set_int('custom-column-spacing', rec.gap);
             }));
 
         const updateInfo = () => {
@@ -282,7 +408,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const c = settings.get_int('custom-columns');
             const rsp = settings.get_int('custom-row-spacing');
             const csp = settings.get_int('custom-column-spacing');
-            infoLabel.label = `${r} × ${c} = ${r * c} apps per page, gap ${rsp}×${csp} px`;
+            infoLabel.label =
+                `${r} × ${c} = ${r * c} apps per page, gap ${rsp}×${csp} px`;
         };
         disconnectIds.push(
             settings.connect('changed::custom-rows', updateInfo),
@@ -291,14 +418,17 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             settings.connect('changed::custom-column-spacing', updateInfo));
         updateInfo();
 
-        /* ======== Right: Preview ======== */
+        return {widget: leftScroll, disconnectIds};
+    }
+
+    _buildPreviewPane(settings) {
+        const cleanupFns = [];
+
         const rightBox = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
-            margin_top: 16,
-            margin_bottom: 16,
-            margin_start: 24,
-            margin_end: 24,
+            margin_top: 16, margin_bottom: 16,
+            margin_start: 24, margin_end: 24,
         });
 
         const screenLabel = new Gtk.Label({
@@ -342,12 +472,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const refreshMonitorSize = () => {
             try {
                 const display = Gdk.Display.get_default();
-                if (!display)
-                    return;
-                const monitors = display.get_monitors();
-                const monitor = monitors.get_item(0);
-                if (!monitor)
-                    return;
+                if (!display) return;
+                const monitor = display.get_monitors()?.get_item(0);
+                if (!monitor) return;
                 const geom = monitor.get_geometry();
                 ps.monitorW = geom.width;
                 ps.monitorH = geom.height;
@@ -362,7 +489,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const loadWallpaper = () => {
             try {
                 const isDark = Adw.StyleManager.get_default().dark;
-                let uri = bgSettings.get_string(isDark ? 'picture-uri-dark' : 'picture-uri');
+                let uri = bgSettings.get_string(
+                    isDark ? 'picture-uri-dark' : 'picture-uri');
                 if (!uri)
                     uri = bgSettings.get_string('picture-uri');
                 if (uri) {
@@ -384,6 +512,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Gtk.StyleContext.remove_provider_for_display(
                 Gdk.Display.get_default(), wpProvider);
         });
+
         const sm = Adw.StyleManager.get_default();
         const smId = sm.connect('notify::dark', loadWallpaper);
         cleanupFns.push(() => sm.disconnect(smId));
@@ -391,39 +520,30 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const updatePreview = () => {
             refreshMonitorSize();
 
-            let iconSize, rows, columns, rowGap, colGap;
-            if (settings.get_boolean('use-presets')) {
-                const level = settings.get_int('preset-level');
-                const preset = PRESETS[level];
-                const rec = recommendGrid(preset.iconSize);
-                iconSize = preset.iconSize;
-                rows = rec.rows;
-                columns = rec.columns;
-                rowGap = rec.spacing;
-                colGap = rec.spacing;
-            } else {
-                iconSize = settings.get_int('custom-icon-size');
-                rows = settings.get_int('custom-rows');
-                columns = settings.get_int('custom-columns');
-                rowGap = settings.get_int('custom-row-spacing');
-                colGap = settings.get_int('custom-column-spacing');
-            }
-
+            const config = readGridConfig(settings);
+            const {iconSize, rows, columns, rowGap, colGap, usePresets} = config;
             const mW = ps.monitorW;
             const mH = ps.monitorH;
             const layout = estimateGridArea(mW, mH);
-            const {iconAreaW, iconAreaH} = layout;
-            const cellSize = iconSize + 24;
-            const usePresets = settings.get_boolean('use-presets');
-            const effectiveW = usePresets ? Math.round(iconAreaW * 2 / 3) : iconAreaW;
-            const fitCols = Math.max(2, Math.floor((effectiveW + colGap) / (cellSize + colGap)));
-            const fitRows = Math.max(2, Math.floor((iconAreaH + rowGap) / (cellSize + rowGap)));
-            Object.assign(ps, layout, {iconSize, rows, columns, rowGap, colGap, fitRows, fitCols,
-                usePresets, cellSize, monitorW: mW, monitorH: mH});
+            const cellSize = iconSize + TILE_PADDING;
+
+            const effectiveW = usePresets
+                ? Math.round(layout.iconAreaW * EFFECTIVE_WIDTH_RATIO)
+                : layout.iconAreaW;
+            const fitCols = Math.max(MIN_GRID_DIMENSION,
+                Math.floor((effectiveW + colGap) / (cellSize + colGap)));
+            const fitRows = Math.max(MIN_GRID_DIMENSION,
+                Math.floor((layout.iconAreaH + rowGap) / (cellSize + rowGap)));
+
+            Object.assign(ps, layout, {
+                iconSize, rows, columns, rowGap, colGap,
+                fitRows, fitCols, usePresets, cellSize,
+                monitorW: mW, monitorH: mH,
+            });
 
             aspectFrame.ratio = mW / mH;
-
-            screenLabel.label = `Monitor: ${mW} × ${mH}  ·  Icon area: ~${iconAreaW} × ${iconAreaH}`;
+            screenLabel.label =
+                `Monitor: ${mW} × ${mH}  ·  Icon area: ~${layout.iconAreaW} × ${layout.iconAreaH}`;
 
             if (usePresets) {
                 fitLabel.label =
@@ -436,7 +556,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 let text =
                     `Grid: ${rows}×${columns} = ${rows * columns} apps  ·  ` +
                     `${gridW}×${gridH}px  ·  ` +
-                    `${Math.round(gridW / iconAreaW * 100)}%×${Math.round(gridH / iconAreaH * 100)}% of icon area\n` +
+                    `${Math.round(gridW / layout.iconAreaW * 100)}%×` +
+                    `${Math.round(gridH / layout.iconAreaH * 100)}% of icon area\n` +
                     `Auto-fit: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps  ·  ` +
                     `${fGridW}×${fGridH}px`;
                 if (rows !== fitRows || columns !== fitCols)
@@ -447,21 +568,24 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             da.queue_draw();
         };
 
-        for (const key of ['use-presets', 'preset-level',
-            'custom-icon-size', 'custom-rows', 'custom-columns',
-            'custom-row-spacing', 'custom-column-spacing'])
-            disconnectIds.push(settings.connect(`changed::${key}`, updatePreview));
+        const prevDisconnectIds = [];
+        for (const key of SETTINGS_KEYS)
+            prevDisconnectIds.push(settings.connect(`changed::${key}`, updatePreview));
+        cleanupFns.push(() => {
+            for (const id of prevDisconnectIds) settings.disconnect(id);
+        });
         updatePreview();
 
         da.set_draw_func((_area, cr, drawW, drawH) => {
             const {
                 monitorW, monitorH, panelH, searchH, dashH, miniWsH,
-                searchY, appDspY, miniWsY, dashY,
+                searchY, miniWsY, dashY,
                 iconAreaX, iconAreaYPos, iconAreaW, iconAreaH,
-                rows, columns, rowGap, colGap, fitRows, fitCols, usePresets, cellSize,
+                rows, columns, rowGap, colGap,
+                fitRows, fitCols, usePresets, cellSize,
             } = ps;
 
-            const pad = 8;
+            const pad = PREVIEW_PADDING;
             const aW = drawW - pad * 2;
             const aH = drawH - pad * 2;
 
@@ -482,130 +606,28 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             cr.rectangle(fx, fy, fW, fH);
             cr.fill();
 
-            cr.setDash([3, 2], 0);
-            cr.setLineWidth(1);
-
-            const panelY = fy;
-            const panelHs = panelH * sc;
-            cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
-            cr.rectangle(fx, panelY, fW, panelHs);
-            cr.stroke();
-            cr.setSourceRGBA(0, 0, 0, 0.4);
-            cr.fill();
-            cr.setSourceRGBA(0.5, 0.6, 0.7, 0.4);
-            const actH = Math.max(2, 10 * sc);
-            roundedRect(cr, fx + 10 * sc, panelY + (panelHs - actH) / 2, Math.max(4, 70 * sc), actH, Math.max(1, 3 * sc));
-            cr.fill();
-            cr.arc(fx + fW / 2, panelY + panelHs / 2, Math.max(2, 4 * sc), 0, Math.PI * 2);
-            cr.fill();
-            const sysW = Math.max(4, 50 * sc);
-            roundedRect(cr, fx + fW - sysW - 10 * sc, panelY + (panelHs - actH) / 2, sysW, actH, Math.max(1, 3 * sc));
-            cr.fill();
-
-            const sY = fy + searchY * sc;
-            const sH = searchH * sc;
-            cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
-            cr.rectangle(fx, sY, fW, sH);
-            cr.stroke();
-            const pillH = Math.max(4, 30 * sc);
-            const pillW = Math.min(360 * sc, fW * 0.35);
-            const pillX = fx + (fW - pillW) / 2;
-            const pillY = sY + (sH - pillH) / 2;
-            cr.setSourceRGBA(0.5, 0.5, 0.55, 0.3);
-            roundedRect(cr, pillX, pillY, pillW, pillH, pillH / 2);
-            cr.fill();
-
-            const mwY = fy + miniWsY * sc;
-            const mwH = miniWsH * sc;
-            cr.setDash([3, 2], 0);
-            cr.setLineWidth(1);
-            cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
-            cr.rectangle(fx, mwY, fW, mwH);
-            cr.stroke();
-            const wsThumbW = Math.max(8, 120 * sc);
-            const wsThumbH = mwH * 0.6;
-            const wsGap = Math.max(2, 10 * sc);
-            const wsCount = Math.max(2, Math.min(4, Math.floor((fW - 40 * sc) / (wsThumbW + wsGap))));
-            const wsTotalW = wsCount * wsThumbW + (wsCount - 1) * wsGap;
-            const wsStartX = fx + (fW - wsTotalW) / 2;
-            const wsStartY = mwY + (mwH - wsThumbH) / 2;
-            cr.setSourceRGBA(0.5, 0.5, 0.55, 0.25);
-            for (let i = 0; i < wsCount; i++) {
-                roundedRect(cr, wsStartX + i * (wsThumbW + wsGap), wsStartY, wsThumbW, wsThumbH, Math.max(1, 3 * sc));
-                cr.fill();
-            }
-
-            const iaX = fx + iconAreaX * sc;
-            const iaY = fy + iconAreaYPos * sc;
-            const iaW = iconAreaW * sc;
-            const iaH = iconAreaH * sc;
+            drawPanelSection(cr, fx, fy, fW, panelH, sc);
+            drawSearchSection(cr, fx, fW,
+                fy + searchY * sc, searchH * sc, sc);
+            drawMiniWsSection(cr, fx, fW,
+                fy + miniWsY * sc, miniWsH * sc, sc);
 
             const drawRows = usePresets ? fitRows : rows;
             const drawCols = usePresets ? fitCols : columns;
-            const cellW = cellSize * sc;
-            const cellH = cellSize * sc;
-            const gapW = colGap * sc;
-            const gapH = rowGap * sc;
-            const gridW = drawCols * cellW + Math.max(0, drawCols - 1) * gapW;
-            const gridH = drawRows * cellH + Math.max(0, drawRows - 1) * gapH;
-            const gx = iaX + (iaW - gridW) / 2;
-            const gy = iaY + (iaH - gridH) / 2;
+            drawGridSection(cr,
+                fx + iconAreaX * sc, fy + iconAreaYPos * sc,
+                iconAreaW * sc, iconAreaH * sc,
+                drawRows, drawCols, fitRows, fitCols,
+                cellSize * sc, cellSize * sc,
+                colGap * sc, rowGap * sc,
+                sc, usePresets);
 
-            for (let row = 0; row < drawRows; row++) {
-                for (let col = 0; col < drawCols; col++) {
-                    const cx = gx + col * (cellW + gapW);
-                    const cy = gy + row * (cellH + gapH);
-                    const overflow = !usePresets && (row >= fitRows || col >= fitCols);
-                    cr.setSourceRGBA(
-                        overflow ? 0.85 : 0.35,
-                        overflow ? 0.30 : 0.55,
-                        overflow ? 0.30 : 0.85,
-                        overflow ? 0.45 : 0.65,
-                    );
-                    roundedRect(cr, cx, cy, cellW, cellH, Math.max(1, 3 * sc));
-                    cr.fill();
-                }
-            }
-
-            if (!usePresets && (fitRows !== rows || fitCols !== columns)) {
-                const afW = fitCols * cellW + Math.max(0, fitCols - 1) * gapW;
-                const afH = fitRows * cellH + Math.max(0, fitRows - 1) * gapH;
-                const afx = iaX + (iaW - afW) / 2;
-                const afy = iaY + (iaH - afH) / 2;
-                cr.setSourceRGBA(0.3, 0.8, 0.4, 0.6);
-                cr.setLineWidth(1.5);
-                cr.setDash([4, 3], 0);
-                cr.rectangle(afx - 2, afy - 2, afW + 4, afH + 4);
-                cr.stroke();
-            }
-
-            const dY = fy + dashY * sc;
-            const dH = dashH * sc;
-            cr.setDash([3, 2], 0);
-            cr.setLineWidth(1);
-            cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
-            cr.rectangle(fx, dY, fW, dH);
-            cr.stroke();
-            cr.setSourceRGBA(0, 0, 0, 0.35);
-            cr.fill();
-            const dockIc = Math.max(4, 46 * sc);
-            const dockGap = Math.max(2, 8 * sc);
-            const dockN = 5;
-            const dockTW = dockN * dockIc + (dockN - 1) * dockGap;
-            const dockSX = fx + (fW - dockTW) / 2;
-            const dockSY = dY + (dH - dockIc) / 2;
-            cr.setSourceRGBA(0.45, 0.55, 0.65, 0.35);
-            for (let i = 0; i < dockN; i++) {
-                roundedRect(cr, dockSX + i * (dockIc + dockGap), dockSY, dockIc, dockIc, Math.max(1, 6 * sc));
-                cr.fill();
-            }
+            drawDashSection(cr, fx, fW,
+                fy + dashY * sc, dashH * sc, sc);
 
             cr.setDash([], 0);
         });
 
-        paned.set_start_child(leftScroll);
-        paned.set_end_child(rightBox);
-        rootRow.set_child(paned);
-        rootGroup.add(rootRow);
+        return {widget: rightBox, cleanupFns};
     }
 }
