@@ -2,8 +2,8 @@
   "uuid": "appgrid-size@luyao",
   "name": "AppGrid Fit",
   "description": "Customize App Grid icon size, rows/columns and spacing to fit more apps per page",
-  "shell-version": ["50"],
-  "version": "1.0.0",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "version": "1.1.0",
   "url": "https://github.com/Luyao-1024/AppGrid-Fit",
   "settings-schema": "org.gnome.shell.extensions.appgrid-size"
 }

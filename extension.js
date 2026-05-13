@@ -142,7 +142,8 @@ export default class AppGridSizeExtension extends Extension {
                 const availW = boxW - p.left - p.right;
                 const availH = boxH - p.top - p.bottom;
                 const cellSize = iconSize + 24;
-                const maxCols = Math.max(2, Math.floor((availW + colGap) / (cellSize + colGap)));
+                const effectiveW = Math.round(availW * 2 / 3);
+                const maxCols = Math.max(2, Math.floor((effectiveW + colGap) / (cellSize + colGap)));
                 const maxRows = Math.max(2, Math.floor((availH + rowGap) / (cellSize + rowGap)));
                 columns = maxCols;
                 rows = maxRows;
