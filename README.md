@@ -1,6 +1,6 @@
 # AppGrid Fit
 
-A GNOME Shell 50 extension that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
+A GNOME Shell extension (46–50) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
 ## Features
 
@@ -70,7 +70,7 @@ Switch between presets or enable **Custom Mode** for granular control.
 
 ## Requirements
 
-- GNOME Shell 50
+- GNOME Shell 46, 47, 48, 49, or 50
 
 ## License
 
