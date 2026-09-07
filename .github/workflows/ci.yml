@@ -20,12 +20,12 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -62,7 +62,7 @@ jobs:
           printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python for Shexli
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -83,7 +83,7 @@ jobs:
           fi
 
       - name: Upload validated extension
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: appgrid-fit-${{ github.sha }}
           path: ${{ steps.package.outputs.archive }}
