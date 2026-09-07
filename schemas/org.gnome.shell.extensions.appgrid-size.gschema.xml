@@ -16,6 +16,12 @@
       <description>0=Large(96px), 1=Medium(64px), 2=Small(48px), 3=Tiny(32px)</description>
     </key>
 
+    <key type="b" name="consolidate-pages">
+      <default>false</default>
+      <summary>Consolidate app pages</summary>
+      <description>Fill vacancies on earlier pages and persist the resulting app order.</description>
+    </key>
+
     <key type="i" name="custom-icon-size">
       <default>64</default>
       <range min="16" max="160"/>

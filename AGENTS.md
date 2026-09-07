@@ -46,20 +46,16 @@ Clutter.Actor → St.Viewport → IconGrid → AppGrid   ← instance we overrid
 
 ## Constants
 
-Both files share the same set of named constants for the grid recommendation formula and
-auto-fit calculations:
+`config.js` is the single source of truth for presets, settings keys, and grid-fit
+calculations used by both runtime and preferences code.
 
 ### Grid formula constants
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `DEFAULT_ICON_SIZE` | `96` | GNOME Shell default icon size |
-| `DEFAULT_GRID_ROWS` | `6` | Default rows at 96px |
-| `DEFAULT_GRID_COLUMNS` | `9` | Default columns at 96px |
-| `DEFAULT_GAP` | `12` | Default spacing at 96px (`$base_padding*2`) |
 | `TILE_PADDING` | `24` | `.overview-tile` CSS padding (12px per side) |
 | `MIN_GRID_DIMENSION` | `2` | Minimum rows/columns |
-| `EFFECTIVE_WIDTH_RATIO` | `2/3` | Portion of available width used for auto-fit columns |
+| `PRESET_WIDTH_RATIO` | `2/3` | Portion of available width used for balanced-fit columns |
 | `UNCONSTRAINED_SPACING` | `-1` | max_row/column_spacing value to disable limit |
 
 ### Shell layout estimation constants (prefs.js only)
@@ -93,21 +89,21 @@ Used by `estimateGridArea()` to approximate the GNOME Shell overview layout:
 | `SETTINGS_KEYS` | `_connectSettings()` / `_buildPreviewPane()` — connect to all setting changes |
 | `ENFORCED_PROPERTIES` | `_setupEnforcers()` — connect `notify::*` on layout manager |
 | `SIZE_NAMES` | `['Large', 'Medium', 'Small', 'Tiny']` — preset display labels |
-| `PRESETS` | Both files — computed from `recommendGrid()` |
+| `PRESETS` | `config.js` — explicit, stable preset definitions |
 
 ---
 
 ## Key Mechanisms
 
-### Auto-fit presets
+### Balanced-fit presets
 
 When preset mode is active, `_apply()` → `_readGridConfig()` → `_computeAutoFit()` reads
-the grid's allocation box and computes the maximum rows/columns that physically fit.
+the grid's allocation box and computes rows/columns using two thirds of available width.
 The cell size accounts for `.overview-tile` CSS padding:
 
 ```
 cellSize = iconSize + TILE_PADDING
-effectiveW = round(availW × EFFECTIVE_WIDTH_RATIO)
+effectiveW = round(availW × PRESET_WIDTH_RATIO)
 maxCols = max(MIN_GRID_DIMENSION, floor((effectiveW + colGap) / (cellSize + colGap)))
 maxRows = max(MIN_GRID_DIMENSION, floor((availH + rowGap) / (cellSize + rowGap)))
 ```
@@ -136,9 +132,13 @@ immediately restores the extension's value.
 
 ### Page consolidation
 
-`_consolidatePages()` walks `lm._pages` and calls `_fillItemVacancies()` to pull items from
+`consolidatePages()` walks `lm._pages` and calls `_fillItemVacancies()` to pull items from
 subsequent pages into earlier unfilled pages. This reduces empty pages when grid density
-increases. After consolidation, `appDisplay._savePages()` is called to persist the result.
+increases. It only runs when `consolidate-pages` is enabled; the setting defaults to false
+because `_savePages()` permanently changes the user's application order.
+
+`reflowPages()` always detects pages above the configured capacity and calls `_updatePages()`
+to move surplus items forward before allocation. This prevents overflow when capacity shrinks.
 
 ### Overview re-apply
 
@@ -155,9 +155,8 @@ overview opens — handles cases where GNOME Shell resets layout between shows.
 
 ## Presets
 
-Generated from `recommendGrid()` formula: `scale = DEFAULT_ICON_SIZE/iconSize`,
-`rows = max(2, floor(DEFAULT_GRID_ROWS × scale))`, `cols = max(2, floor(DEFAULT_GRID_COLUMNS × scale))`,
-`gap = round(DEFAULT_GAP / scale)`.
+Presets are explicit values in `config.js`. Runtime balanced fitting replaces their base
+rows/columns with allocation-dependent values while keeping the preset icon size and gap.
 
 | Level | Icon | Rows × Cols | Apps/Page | Gap |
 |-------|------|-------------|-----------|-----|
@@ -166,13 +165,15 @@ Generated from `recommendGrid()` formula: `scale = DEFAULT_ICON_SIZE/iconSize`,
 | 2 (Small) | 48 px | 8 × 12 | 96 | 14 px |
 | 3 (Tiny) | 32 px | 12 × 16 | 192 | 10 px |
 
-In both files, presets are defined as:
+Presets are defined once as:
 
 ```js
-const PRESETS = [96, 64, 48, 32].map(iconSize => ({
-    iconSize,
-    ...recommendGrid(iconSize),
-}));
+export const PRESETS = [
+    {iconSize: 96, rows: 4, columns: 6, gap: 24},
+    {iconSize: 64, rows: 6, columns: 9, gap: 18},
+    {iconSize: 48, rows: 8, columns: 12, gap: 14},
+    {iconSize: 32, rows: 12, columns: 16, gap: 10},
+]
 ```
 
 ---
@@ -181,7 +182,7 @@ const PRESETS = [96, 64, 48, 32].map(iconSize => ({
 
 ```
 enable()
-  ├─ _resetState()          — initialize _original, _notifyIds, _sigIds, etc.
+  ├─ _resetState()          — initialize original values, signal IDs, allocation state
   ├─ _connectSettings()     — connect changed:: for each SETTINGS_KEYS
   ├─ _apply()
   │   ├─ _saveOriginalValues(lm, grid)   — first-run: snapshot defaults into _original
@@ -189,14 +190,17 @@ enable()
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
-  │   ├─ _consolidatePages(lm)           — fill page vacancies
+  │   ├─ reflowPages(lm, {consolidate})  — move overflow; optionally fill vacancies
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
-  └─ Main.overview.connect('showing')
+  ├─ Main.overview.connect('showing')
+  └─ Main.layoutManager.connect('monitors-changed')
 
 disable()
+  ├─ _cancelScheduledApply()
   ├─ _disconnectOverview()
+  ├─ _disconnectMonitorsChanged()
   ├─ _disconnectSettings()  — disconnect + null _settings
-  ├─ _disconnectEnforcers() — disconnect all notify handlers
+  ├─ _disconnectGridBindings() — disconnect allocation + notify handlers
   ├─ _restoreOriginalLayout() — restore saved _original values, then _forceRelayout
   └─ _resetState()
 
@@ -205,8 +209,8 @@ _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
 ```
 
-Original layout values are stored in a single `this._original` object (set once on first
-`_apply()`, restored in `disable()`).
+Original layout values are stored in `this._original` for the current layout manager and
+restored on disable or after a partial apply failure.
 
 ---
 
@@ -214,27 +218,29 @@ Original layout values are stored in a single `this._original` object (set once 
 
 ### Layout
 
-The prefs window uses a horizontal `Gtk.Paned` (position 300) inside a single
-`Adw.PreferencesRow`. Default window size: 1200×600.
+The prefs window uses a horizontal `Gtk.Paned` inside a single `Adw.PreferencesRow`.
+`findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1200 so both panes
+receive their natural width. Default window size: 1100×500.
 
 ```
 fillPreferencesWindow(window)
-  ├─ _buildControlsPane(settings) → {widget: leftScroll, disconnectIds[]}
-  │    └─ leftScroll (Gtk.ScrolledWindow)
-  │         └─ leftBox (Gtk.Box, vertical, margin 24/16)
-  │              ├─ modeGroup    — "Use preset sizes" SwitchRow
-  │              ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
-  │              └─ customGroup  — 5 SpinRows + info label (visible when preset=false)
-  └─ _buildPreviewPane(settings) → {widget: rightBox, cleanupFns[]}
-       └─ rightBox (Gtk.Box, vertical, margin 24/16)
-            ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
-            ├─ AspectFrame → previewFrame (Cairo grid preview, vexpand, css 'card')
-            │    └─ DrawingArea — draws overview preview via section functions
-            └─ fitLabel   — grid/auto-fit stats
+  └─ paned (Gtk.Paned, horizontal, position 420)
+       ├─ _buildControlsPane(settings) → {widget: controlsBox, cleanupFns[]}
+       │    └─ controlsBox (Gtk.Box, vertical, margin 24/16)
+       │         ├─ modeGroup    — "Use preset sizes" SwitchRow
+       │         ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
+       │         ├─ customGroup  — 5 SpinRows + info label (visible when preset=false)
+       │         └─ behaviorGroup — optional page consolidation switch
+       └─ _buildPreviewPane(settings) → {widget: rightBox, cleanupFns[]}
+            └─ rightBox (Gtk.Box, vertical, margin 24/16)
+                 ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
+                 ├─ Adw.Clamp → AspectFrame → previewFrame (Cairo grid preview, css 'card')
+                 │    └─ DrawingArea — draws overview preview via section functions
+                 └─ fitLabel   — grid/balanced-fit stats
 ```
 
-`fillPreferencesWindow` collects `disconnectIds` from the controls pane and `cleanupFns`
-from the preview pane, wiring both to the window's `close-request` signal.
+`fillPreferencesWindow` collects cleanup functions from both panes and invokes them once
+from the window's `close-request` signal. Every signal is disconnected from its owner.
 
 ### Shared helpers
 
@@ -267,26 +273,26 @@ iconAreaH = pageH - 2×SHELL_PAGE_PAD
 | `drawPanelSection(cr, fx, fy, fW, panelH, sc)` | Top panel with Activities, clock, system indicators |
 | `drawSearchSection(cr, fx, fW, sY, sH, sc)` | Search bar with pill-shaped entry |
 | `drawMiniWsSection(cr, fx, fW, mwY, mwH, sc)` | Mini workspace thumbnails |
-| `drawGridSection(cr, iaX, iaY, iaW, iaH, drawRows, drawCols, fitRows, fitCols, cellW, cellH, gapW, gapH, sc, usePresets)` | Icon grid cells (blue normal, red overflow, green auto-fit border) |
+| `drawGridSection(cr, iaX, iaY, iaW, iaH, drawRows, drawCols, fitRows, fitCols, cellW, cellH, gapW, gapH, sc, usePresets)` | Icon grid cells (blue normal, red overflow, green capacity border) |
 | `drawDashSection(cr, fx, fW, dY, dH, sc)` | Bottom dash with `DOCK_ICON_COUNT` dock icons |
 
 All section functions receive scaled coordinates from the main draw callback.
 
-**Auto-fit** uses the same formula as `extension.js` via `readGridConfig()`:
+**Grid fit** uses `computeGridFit()` from `config.js`:
 
 ```
 cellSize = iconSize + TILE_PADDING
-effectiveW = usePresets ? round(iconAreaW × EFFECTIVE_WIDTH_RATIO) : iconAreaW
+effectiveW = usePresets ? round(iconAreaW × PRESET_WIDTH_RATIO) : iconAreaW
 fitCols = max(MIN_GRID_DIMENSION, floor((effectiveW + colGap) / (cellSize + colGap)))
 fitRows = max(MIN_GRID_DIMENSION, floor((iconAreaH + rowGap) / (cellSize + rowGap)))
 ```
 
-In preset mode, the preview draws cells using auto-fit values (`fitRows×fitCols`),
+In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`),
 matching the extension's runtime behavior. In custom mode, it draws the user's
 configured `rows×columns` with overflow cells in red.
 
-**Monitor detection** reads `Gdk.Display.get_default().get_monitors().get_item(0).get_geometry()`
-with a fallback to 1920×1080.
+**Monitor detection** prefers the monitor containing the preferences window, falls back to
+the first display monitor, and finally to 1920×1080.
 
 **Wallpaper** loads the user's desktop background via `org.gnome.desktop.background` GSettings,
 updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
@@ -295,12 +301,13 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 
 ## GSettings Schema
 
-7 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+8 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
 | `use-presets` | bool | `true` | — |
 | `preset-level` | int | `1` | 0–3 |
+| `consolidate-pages` | bool | `false` | — |
 | `custom-icon-size` | int | `64` | 16–160 |
 | `custom-rows` | int | `6` | 2–20 |
 | `custom-columns` | int | `9` | 2–20 |
@@ -315,9 +322,13 @@ After modifying the schema XML, recompile: `glib-compile-schemas schemas/`
 
 ```bash
 glib-compile-schemas schemas/
-gnome-extensions pack --force "$(pwd)"
+gnome-extensions pack --force \
+  --extra-source=config.js \
+  --extra-source=gridPages.js \
+  --extra-source=LICENSE \
+  "$(pwd)"
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
-# Alt+F2 → "r" → Enter (first install or schema changes)
+# Xorg: Alt+F2 → "r" → Enter; Wayland: log out/in
 gnome-extensions enable appgrid-size@luyao
 ```
 
@@ -332,8 +343,8 @@ gnome-extensions enable appgrid-size@luyao
 - Optional chaining (`?.`) and nullish coalescing (`??`) for null-safe property access
 - Signal lifecycle:
   - `_sigIds[]`: raw signal IDs from `settings.connect()`, disconnected in `_disconnectSettings()`
-  - `_notifyIds[]`: objects `{layoutManager, signal}` from `lm.connect()`, disconnected in `_disconnectEnforcers()`
-  - In prefs: `_buildControlsPane` returns `disconnectIds[]`, `_buildPreviewPane` returns `cleanupFns[]`
+  - `_notifyIds[]`: objects `{layoutManager, signal}` from `lm.connect()`, disconnected with grid bindings
+  - In prefs: both pane builders return owner-specific `cleanupFns[]`
 - Original layout values saved in `this._original` object on first `_apply()`, restored in `_restoreOriginalLayout()`
 - State reset centralized in `_resetState()`, called by both `enable()` and `disable()`
 - No comments unless logic is non-obvious
@@ -344,13 +355,19 @@ gnome-extensions enable appgrid-size@luyao
 
 | File | Purpose |
 |------|---------|
-| `extension.js` | Enable/disable, find grid, override layout, auto-fit, consolidate pages |
+| `config.js` | Shared presets, setting keys, fit and pixel-size calculations |
+| `gridPages.js` | Testable page overflow and optional consolidation adapter |
+| `extension.js` | Enable/disable, find grid, override layout, balanced fit, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
+| `tests/*.test.js` | Node unit tests for shared calculations and page reflow |
+| `.github/workflows/ci.yml` | JavaScript, schema, test, and package validation |
+| `LICENSE` | MIT license text |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |
 | `schemas/gschemas.compiled` | Compiled schema (generated, do not edit) |
 | `docs/grid-allocation.md` | GNOME Shell 50 app grid layout allocation analysis (source code reference) |
 | `README.md` | User-facing documentation |
+| `CHANGELOG.md` | Release history |
 | `AGENTS.md` | Developer / AI agent reference (this file) |
 
 ---
@@ -359,7 +376,7 @@ gnome-extensions enable appgrid-size@luyao
 
 - `js/ui/iconGrid.js` — `IconGridLayout` (GObject props, `_calculateSpacing`, `adaptToSize`,
   `vfunc_allocate`), `IconGrid` (`vfunc_style_changed`, `setGridModes`,
-  `_findBestModeForSize`, `_fillItemVacancies`)
+  `_findBestModeForSize`, `_updatePages`, `_fillItemVacancies`)
 - `js/ui/appDisplay.js` — `AppGrid`, `BaseAppView._createGrid()`, `_savePages()`
 - `js/ui/overviewControls.js` — `ControlsManager` with `appDisplay` getter
 - `js/ui/overview.js` — `Overview` / `OverviewActor`
@@ -369,12 +386,14 @@ gnome-extensions enable appgrid-size@luyao
 
 ## Known Limitations
 
-1. **`vfunc_style_changed` resets spacing**: Guarded by `notify` signal enforcers, but
-   `page_valign` / `page_halign` are not reset by CSS — START/CENTER persists after disable.
+1. **Private Shell APIs**: Grid discovery, reflow, icon updates, and persistence depend on
+   private GNOME Shell members. Capability checks prevent common partial failures, but every
+   supported Shell release still requires a smoke test.
 2. **Fixed icon size clips labels**: Icons smaller than the chosen size still render at the
    fixed size; very small icons may clip labels.
-3. **Auto-recommend overwrites manual edits**: The `changed::custom-icon-size` callback
-   overwrites manual row/col/spacing adjustments in the same prefs session.
+3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new
+   order through Shell's page manager. Disabling the extension restores grid properties but
+   cannot reconstruct the previous application order.
 4. **Preview estimates fixed pixel values**: `estimateGridArea()` uses the `SHELL_*` constants
    derived from GNOME Shell 50 source. These may differ across themes, font sizes, or
    display scaling.

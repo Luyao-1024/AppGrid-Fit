@@ -1,0 +1,21 @@
+# Changelog
+
+## 1.2.0 — 2026-09-07
+
+- Centralized presets, settings keys, and grid-fit calculations in `config.js`.
+- Added allocation and monitor-change handling so balanced presets adapt to the active layout.
+- Reflowed overflowing pages when grid capacity shrinks.
+- Made page consolidation optional and disabled it by default to avoid silently changing app order.
+- Restored original rows, columns, alignment, and spacing when the extension is disabled.
+- Reworked the preferences window into a compact 1100×500 horizontal layout.
+- Improved the preview with active-monitor detection, wallpaper handling, and shared fit calculations.
+- Added signal cleanup, capability checks, unit tests, CI validation, and an MIT license file.
+
+## 1.1.0
+
+- Added wallpaper-backed overview previews and adaptive preset fitting.
+- Accounted for overview tile padding when calculating grid capacity.
+
+## 1.0.0
+
+- Initial release with preset and custom App Grid sizing controls.

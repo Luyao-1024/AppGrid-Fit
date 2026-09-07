@@ -4,13 +4,13 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const DEFAULT_ICON_SIZE = 96;
-const DEFAULT_GRID_ROWS = 6;
-const DEFAULT_GRID_COLUMNS = 9;
-const DEFAULT_GAP = 12;
-const TILE_PADDING = 24;
-const MIN_GRID_DIMENSION = 2;
-const EFFECTIVE_WIDTH_RATIO = 2 / 3;
+import {
+    PRESETS,
+    PRESET_WIDTH_RATIO,
+    SETTINGS_KEYS,
+    computeGridFit,
+    computeGridPixelSize,
+} from './config.js';
 
 const SHELL_PANEL_H = 30;
 const SHELL_SEARCH_H = 52;
@@ -28,26 +28,29 @@ const DOCK_ICON_COUNT = 5;
 
 const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
 
-const SETTINGS_KEYS = [
-    'use-presets', 'preset-level',
-    'custom-icon-size', 'custom-rows', 'custom-columns',
-    'custom-row-spacing', 'custom-column-spacing',
-];
-
-function recommendGrid(iconSize) {
-    const scale = DEFAULT_ICON_SIZE / iconSize;
-    const gap = Math.round(DEFAULT_GAP / scale);
-    return {
-        rows: Math.max(MIN_GRID_DIMENSION, Math.floor(DEFAULT_GRID_ROWS * scale)),
-        columns: Math.max(MIN_GRID_DIMENSION, Math.floor(DEFAULT_GRID_COLUMNS * scale)),
-        gap,
-    };
+function connectSignal(cleanupFns, object, signal, callback) {
+    const id = object.connect(signal, callback);
+    cleanupFns.push(() => object.disconnect(id));
 }
 
-const PRESETS = [96, 64, 48, 32].map(iconSize => ({
-    iconSize,
-    ...recommendGrid(iconSize),
-}));
+function findDescendant(widget, widgetType) {
+    for (let child = widget.get_first_child?.(); child;
+        child = child.get_next_sibling()) {
+        if (child instanceof widgetType)
+            return child;
+        const match = findDescendant(child, widgetType);
+        if (match)
+            return match;
+    }
+    return null;
+}
+
+function escapeCssString(value) {
+    return value
+        .replaceAll('\\', '\\\\')
+        .replaceAll('"', '\\"')
+        .replaceAll('\n', '\\a ');
+}
 
 function estimateGridArea(monitorW, monitorH) {
     const workH = monitorH - SHELL_PANEL_H;
@@ -89,11 +92,11 @@ function drawPanelSection(cr, fx, fy, fW, panelH, sc) {
     const panelHs = panelH * sc;
     cr.setDash([3, 2], 0);
     cr.setLineWidth(1);
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
     cr.rectangle(fx, fy, fW, panelHs);
-    cr.stroke();
     cr.setSourceRGBA(0, 0, 0, 0.4);
-    cr.fill();
+    cr.fillPreserve();
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
+    cr.stroke();
 
     cr.setSourceRGBA(0.5, 0.6, 0.7, 0.4);
     const actH = Math.max(2, 10 * sc);
@@ -186,11 +189,11 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
 function drawDashSection(cr, fx, fW, dY, dH, sc) {
     cr.setDash([3, 2], 0);
     cr.setLineWidth(1);
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
     cr.rectangle(fx, dY, fW, dH);
-    cr.stroke();
     cr.setSourceRGBA(0, 0, 0, 0.35);
-    cr.fill();
+    cr.fillPreserve();
+    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
+    cr.stroke();
 
     const dockIc = Math.max(4, 46 * sc);
     const dockGap = Math.max(2, 8 * sc);
@@ -242,20 +245,29 @@ function readGridConfig(settings) {
 export default class AppGridSizePrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
-        const disconnectIds = [];
         const cleanupFns = [];
+        let cleanedUp = false;
 
         window.connect('close-request', () => {
-            for (const id of disconnectIds) settings.disconnect(id);
+            if (cleanedUp)
+                return false;
+            cleanedUp = true;
             for (const fn of cleanupFns) fn();
+            return false;
         });
-        window.set_default_size(1200, 600);
+        window.set_default_size(1100, 500);
 
         const page = new Adw.PreferencesPage({
             title: 'App Grid',
             icon_name: 'view-app-grid-symbolic',
         });
         window.add(page);
+
+        const pageClamp = findDescendant(page, Adw.Clamp);
+        if (pageClamp) {
+            pageClamp.maximum_size = 1200;
+            pageClamp.tightening_threshold = 900;
+        }
 
         const rootGroup = new Adw.PreferencesGroup({});
         page.add(rootGroup);
@@ -267,27 +279,29 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const paned = new Gtk.Paned({
             orientation: Gtk.Orientation.HORIZONTAL,
-            position: 300,
-            shrink_start_child: false,
-            shrink_end_child: false,
+            position: 420,
+            shrink_start_child: true,
+            shrink_end_child: true,
+            resize_start_child: false,
+            resize_end_child: true,
         });
 
-        const {widget: leftScroll, disconnectIds: ctrlIds} =
+        const {widget: controlsBox, cleanupFns: ctrlFns} =
             this._buildControlsPane(settings);
-        disconnectIds.push(...ctrlIds);
+        cleanupFns.push(...ctrlFns);
 
         const {widget: rightBox, cleanupFns: prevFns} =
-            this._buildPreviewPane(settings);
+            this._buildPreviewPane(settings, window);
         cleanupFns.push(...prevFns);
 
-        paned.set_start_child(leftScroll);
+        paned.set_start_child(controlsBox);
         paned.set_end_child(rightBox);
         rootRow.set_child(paned);
         rootGroup.add(rootRow);
     }
 
     _buildControlsPane(settings) {
-        const disconnectIds = [];
+        const cleanupFns = [];
 
         const leftBox = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
@@ -295,12 +309,6 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             margin_top: 16, margin_bottom: 16,
             margin_start: 24, margin_end: 24,
         });
-
-        const leftScroll = new Gtk.ScrolledWindow({
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
-            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
-        });
-        leftScroll.set_child(leftBox);
 
         const modeGroup = new Adw.PreferencesGroup({title: 'Mode'});
         const switchRow = new Adw.SwitchRow({
@@ -328,6 +336,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             label: '',
             halign: Gtk.Align.START,
             margin_top: 4,
+            wrap: true,
+            xalign: 0,
             css_classes: ['dim-label'],
         });
         const presetInfoRow = new Adw.PreferencesRow({
@@ -341,15 +351,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             presetInfo.label =
                 `${p.iconSize}px icons · ${p.rows}×${p.columns} grid · ${p.gap}px gap · ${p.rows * p.columns} apps/page`;
         };
-        disconnectIds.push(
-            settings.connect('changed::preset-level', () => {
-                comboRow.selected = settings.get_int('preset-level');
-                updatePresetInfo();
-            }),
-            comboRow.connect('notify::selected', () => {
-                settings.set_int('preset-level', comboRow.selected);
-                updatePresetInfo();
-            }));
+        connectSignal(cleanupFns, settings, 'changed::preset-level', () => {
+            comboRow.selected = settings.get_int('preset-level');
+            updatePresetInfo();
+        });
+        connectSignal(cleanupFns, comboRow, 'notify::selected', () => {
+            settings.set_int('preset-level', comboRow.selected);
+            updatePresetInfo();
+        });
         updatePresetInfo();
         presetsGroup.add(comboRow);
         presetsGroup.add(presetInfoRow);
@@ -357,7 +366,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const customGroup = new Adw.PreferencesGroup({
             title: 'Custom',
-            description: 'Adjust manually — rows/columns and spacing auto-suggest on icon size change',
+            description: 'Adjust icon size, capacity and spacing independently',
         });
 
         customGroup.add(createSpinRow(settings, 'custom-icon-size',
@@ -375,6 +384,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             label: '',
             halign: Gtk.Align.START,
             margin_top: 4,
+            wrap: true,
+            xalign: 0,
             css_classes: ['dim-label'],
         });
         const infoRow = new Adw.PreferencesRow({
@@ -385,23 +396,26 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         customGroup.add(infoRow);
         leftBox.append(customGroup);
 
+        const behaviorGroup = new Adw.PreferencesGroup({
+            title: 'Page layout',
+        });
+        const consolidateRow = new Adw.SwitchRow({
+            title: 'Consolidate app pages',
+            subtitle: 'Fill earlier pages and permanently save the new app order',
+        });
+        settings.bind('consolidate-pages', consolidateRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        behaviorGroup.add(consolidateRow);
+        leftBox.append(behaviorGroup);
+
         const updateVisibility = () => {
             const preset = settings.get_boolean('use-presets');
             presetsGroup.visible = preset;
             customGroup.visible = !preset;
         };
-        disconnectIds.push(
-            settings.connect('changed::use-presets', updateVisibility));
+        connectSignal(cleanupFns, settings,
+            'changed::use-presets', updateVisibility);
         updateVisibility();
-
-        disconnectIds.push(
-            settings.connect('changed::custom-icon-size', () => {
-                const rec = recommendGrid(settings.get_int('custom-icon-size'));
-                settings.set_int('custom-rows', rec.rows);
-                settings.set_int('custom-columns', rec.columns);
-                settings.set_int('custom-row-spacing', rec.gap);
-                settings.set_int('custom-column-spacing', rec.gap);
-            }));
 
         const updateInfo = () => {
             const r = settings.get_int('custom-rows');
@@ -411,17 +425,20 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             infoLabel.label =
                 `${r} × ${c} = ${r * c} apps per page, gap ${rsp}×${csp} px`;
         };
-        disconnectIds.push(
-            settings.connect('changed::custom-rows', updateInfo),
-            settings.connect('changed::custom-columns', updateInfo),
-            settings.connect('changed::custom-row-spacing', updateInfo),
-            settings.connect('changed::custom-column-spacing', updateInfo));
+        for (const key of [
+            'custom-rows',
+            'custom-columns',
+            'custom-row-spacing',
+            'custom-column-spacing',
+        ]) {
+            connectSignal(cleanupFns, settings, `changed::${key}`, updateInfo);
+        }
         updateInfo();
 
-        return {widget: leftScroll, disconnectIds};
+        return {widget: leftBox, cleanupFns};
     }
 
-    _buildPreviewPane(settings) {
+    _buildPreviewPane(settings, window) {
         const cleanupFns = [];
 
         const rightBox = new Gtk.Box({
@@ -434,6 +451,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const screenLabel = new Gtk.Label({
             label: '',
             halign: Gtk.Align.CENTER,
+            wrap: true,
             css_classes: ['dim-label', 'caption'],
         });
 
@@ -442,12 +460,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             overflow: Gtk.Overflow.HIDDEN,
         });
         previewFrame.add_css_class('card');
-        previewFrame.add_css_class('wp-preview');
+        previewFrame.add_css_class('appgrid-fit-wallpaper-preview');
 
         const da = new Gtk.DrawingArea();
-        da.set_content_width(400);
-        da.set_content_height(400);
-        da.set_vexpand(true);
+        da.set_content_width(320);
+        da.set_content_height(180);
         previewFrame.append(da);
 
         const aspectFrame = new Gtk.AspectFrame({
@@ -455,6 +472,12 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             obey_child: false,
         });
         aspectFrame.set_child(previewFrame);
+
+        const previewClamp = new Adw.Clamp({
+            maximum_size: 440,
+            tightening_threshold: 320,
+        });
+        previewClamp.set_child(aspectFrame);
 
         const fitLabel = new Gtk.Label({
             label: '',
@@ -464,7 +487,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         });
 
         rightBox.append(screenLabel);
-        rightBox.append(aspectFrame);
+        rightBox.append(previewClamp);
         rightBox.append(fitLabel);
 
         const ps = {monitorW: 1920, monitorH: 1080};
@@ -472,9 +495,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const refreshMonitorSize = () => {
             try {
                 const display = Gdk.Display.get_default();
-                if (!display) return;
-                const monitor = display.get_monitors()?.get_item(0);
-                if (!monitor) return;
+                if (!display)
+                    return;
+                const surface = window.get_surface();
+                const monitor = surface
+                    ? display.get_monitor_at_surface(surface)
+                    : display.get_monitors()?.get_item(0);
+                if (!monitor)
+                    return;
                 const geom = monitor.get_geometry();
                 ps.monitorW = geom.width;
                 ps.monitorH = geom.height;
@@ -483,8 +511,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const bgSettings = Gio.Settings.new('org.gnome.desktop.background');
         const wpProvider = new Gtk.CssProvider();
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), wpProvider, Gtk.STYLE_PROVIDER_PRIORITY_USER);
+        const display = Gdk.Display.get_default();
+        if (display) {
+            Gtk.StyleContext.add_provider_for_display(
+                display, wpProvider, Gtk.STYLE_PROVIDER_PRIORITY_USER);
+        }
 
         const loadWallpaper = () => {
             try {
@@ -494,28 +525,31 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 if (!uri)
                     uri = bgSettings.get_string('picture-uri');
                 if (uri) {
-                    const path = Gio.File.new_for_uri(uri).get_path();
+                    const safeUri = escapeCssString(
+                        Gio.File.new_for_uri(uri).get_uri());
                     wpProvider.load_from_data(
-                        `.wp-preview{background-image:url("file://${path}");background-size:cover;}`, -1);
+                        `.appgrid-fit-wallpaper-preview{background-image:url("${safeUri}");background-size:cover;}`, -1);
                     return;
                 }
             } catch (_e) {}
-            wpProvider.load_from_data(`.wp-preview{background-image:none;}`, -1);
+            wpProvider.load_from_data(
+                '.appgrid-fit-wallpaper-preview{background-image:none;}', -1);
         };
 
         loadWallpaper();
-        const bgId1 = bgSettings.connect('changed::picture-uri', loadWallpaper);
-        const bgId2 = bgSettings.connect('changed::picture-uri-dark', loadWallpaper);
+        connectSignal(cleanupFns, bgSettings,
+            'changed::picture-uri', loadWallpaper);
+        connectSignal(cleanupFns, bgSettings,
+            'changed::picture-uri-dark', loadWallpaper);
         cleanupFns.push(() => {
-            bgSettings.disconnect(bgId1);
-            bgSettings.disconnect(bgId2);
+            if (!display)
+                return;
             Gtk.StyleContext.remove_provider_for_display(
-                Gdk.Display.get_default(), wpProvider);
+                display, wpProvider);
         });
 
         const sm = Adw.StyleManager.get_default();
-        const smId = sm.connect('notify::dark', loadWallpaper);
-        cleanupFns.push(() => sm.disconnect(smId));
+        connectSignal(cleanupFns, sm, 'notify::dark', loadWallpaper);
 
         const updatePreview = () => {
             refreshMonitorSize();
@@ -525,15 +559,19 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const mW = ps.monitorW;
             const mH = ps.monitorH;
             const layout = estimateGridArea(mW, mH);
-            const cellSize = iconSize + TILE_PADDING;
-
-            const effectiveW = usePresets
-                ? Math.round(layout.iconAreaW * EFFECTIVE_WIDTH_RATIO)
-                : layout.iconAreaW;
-            const fitCols = Math.max(MIN_GRID_DIMENSION,
-                Math.floor((effectiveW + colGap) / (cellSize + colGap)));
-            const fitRows = Math.max(MIN_GRID_DIMENSION,
-                Math.floor((layout.iconAreaH + rowGap) / (cellSize + rowGap)));
+            const fit = computeGridFit({
+                width: layout.iconAreaW,
+                height: layout.iconAreaH,
+                iconSize,
+                rowGap,
+                columnGap: colGap,
+                widthRatio: usePresets ? PRESET_WIDTH_RATIO : 1,
+            });
+            const {
+                rows: fitRows,
+                columns: fitCols,
+                cellSize,
+            } = fit;
 
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
@@ -547,33 +585,35 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             if (usePresets) {
                 fitLabel.label =
-                    `Auto-fit: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps/page`;
+                    `Balanced fit: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps/page`;
             } else {
-                const gridW = columns * cellSize + Math.max(0, columns - 1) * colGap;
-                const gridH = rows * cellSize + Math.max(0, rows - 1) * rowGap;
-                const fGridW = fitCols * cellSize + Math.max(0, fitCols - 1) * colGap;
-                const fGridH = fitRows * cellSize + Math.max(0, fitRows - 1) * rowGap;
+                const gridSize = computeGridPixelSize(
+                    rows, columns, cellSize, rowGap, colGap);
+                const fitSize = computeGridPixelSize(
+                    fitRows, fitCols, cellSize, rowGap, colGap);
                 let text =
                     `Grid: ${rows}×${columns} = ${rows * columns} apps  ·  ` +
-                    `${gridW}×${gridH}px  ·  ` +
-                    `${Math.round(gridW / layout.iconAreaW * 100)}%×` +
-                    `${Math.round(gridH / layout.iconAreaH * 100)}% of icon area\n` +
-                    `Auto-fit: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps  ·  ` +
-                    `${fGridW}×${fGridH}px`;
+                    `${gridSize.width}×${gridSize.height}px  ·  ` +
+                    `${Math.round(gridSize.width / layout.iconAreaW * 100)}%×` +
+                    `${Math.round(gridSize.height / layout.iconAreaH * 100)}% of icon area\n` +
+                    `Capacity estimate: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps  ·  ` +
+                    `${fitSize.width}×${fitSize.height}px`;
                 if (rows !== fitRows || columns !== fitCols)
-                    text += '\nConfigured grid differs from auto-fit';
+                    text += '\nConfigured grid differs from the capacity estimate';
                 fitLabel.label = text;
             }
 
             da.queue_draw();
         };
 
-        const prevDisconnectIds = [];
-        for (const key of SETTINGS_KEYS)
-            prevDisconnectIds.push(settings.connect(`changed::${key}`, updatePreview));
-        cleanupFns.push(() => {
-            for (const id of prevDisconnectIds) settings.disconnect(id);
-        });
+        for (const key of SETTINGS_KEYS) {
+            connectSignal(cleanupFns, settings,
+                `changed::${key}`, updatePreview);
+        }
+        const monitors = display?.get_monitors();
+        if (monitors)
+            connectSignal(cleanupFns, monitors, 'items-changed', updatePreview);
+        connectSignal(cleanupFns, window, 'notify::surface', updatePreview);
         updatePreview();
 
         da.set_draw_func((_area, cr, drawW, drawH) => {

@@ -2,13 +2,16 @@
 
 A GNOME Shell extension (46–50) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
+Current version: **1.2.0**
+
 ## Features
 
 - **4 preset levels**: Large (96px), Medium (64px), Small (48px), Tiny (32px)
-- **Auto-fit**: Presets automatically calculate optimal rows/columns for your screen
+- **Balanced fit**: Presets calculate rows/columns from your screen while using two thirds of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
-- **Page consolidation**: Automatically fills pages to capacity, reducing empty pages
-- **Live reload**: Changes apply instantly, no shell restart needed (except first install)
+- **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
+- **Responsive layout**: Recalculates preset capacity when the overview allocation or monitor configuration changes
+- **Live settings**: Preference changes apply immediately after the extension has been loaded
 
 ## Screenshots
 
@@ -30,7 +33,7 @@ A GNOME Shell extension (46–50) that lets you customize the App Grid layout �
 
 ## Presets
 
-Presets auto-fit to your screen — the rows/columns below are base recommendations, actual grid is calculated from your display size at runtime.
+Presets use balanced fitting — the rows/columns below are base recommendations, while the actual grid is calculated from the current allocation at runtime. Balanced fitting intentionally uses two thirds of the available icon-area width so the grid remains compact and centered.
 
 | Level | Icon Size | Base Grid | Gap |
 |-------|-----------|-----------|-----|
@@ -46,14 +49,18 @@ Presets auto-fit to your screen — the rows/columns below are base recommendati
 glib-compile-schemas schemas/
 
 # Package
-gnome-extensions pack --force "$(pwd)"
+gnome-extensions pack --force \
+  --extra-source=config.js \
+  --extra-source=gridPages.js \
+  --extra-source=LICENSE \
+  "$(pwd)"
 
 # Install
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
 
-# Reload GNOME Shell (required for first install)
-# Press Alt+F2, type "r", press Enter
-# Or log out and log back in
+# Reload GNOME Shell (required for first install or schema changes)
+# Xorg: press Alt+F2, type "r", press Enter
+# Wayland: log out and log back in
 
 # Enable
 gnome-extensions enable appgrid-size@luyao
@@ -66,7 +73,11 @@ Open the extension preferences via:
 - **Extensions** app → AppGrid Fit → Settings
 - Or run: `gnome-extensions prefs appgrid-size@luyao`
 
-Switch between presets or enable **Custom Mode** for granular control.
+Switch between presets or disable **Use preset sizes** for granular control. Custom values are independent: changing the icon size does not overwrite the configured rows, columns, or spacing.
+
+**Consolidate app pages** is disabled by default. Enabling it fills earlier pages and permanently saves the resulting application order.
+
+The preferences window uses a compact horizontal layout: controls are placed on the left and the monitor preview on the right. Its default size is 1100×500.
 
 ## Requirements
 
@@ -75,3 +86,15 @@ Switch between presets or enable **Custom Mode** for granular control.
 ## License
 
 MIT
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release details.
+
+## Development checks
+
+```bash
+npm run check:js
+npm test
+glib-compile-schemas --strict --dry-run schemas/
+```

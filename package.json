@@ -1,0 +1,10 @@
+{
+  "name": "appgrid-fit",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:js": "node --check config.js && node --check gridPages.js && node --check extension.js && node --check prefs.js",
+    "test": "node --test"
+  }
+}

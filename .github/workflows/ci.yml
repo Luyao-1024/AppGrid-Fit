@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install GNOME tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnome-shell libglib2.0-bin
+      - name: Check JavaScript
+        run: npm run check:js
+      - name: Run unit tests
+        run: npm test
+      - name: Validate schema and generated database
+        run: |
+          glib-compile-schemas --strict --dry-run schemas
+          schema_dir="$(mktemp -d)"
+          glib-compile-schemas --targetdir="$schema_dir" schemas
+          cmp schemas/gschemas.compiled "$schema_dir/gschemas.compiled"
+      - name: Package extension
+        run: |
+          package_dir="$(mktemp -d)"
+          gnome-extensions pack --force \
+            --extra-source=config.js \
+            --extra-source=gridPages.js \
+            --extra-source=LICENSE \
+            . --out-dir="$package_dir"
+          unzip -l "$package_dir"/*.zip | grep config.js
+          unzip -l "$package_dir"/*.zip | grep gridPages.js
+          unzip -l "$package_dir"/*.zip | grep LICENSE
