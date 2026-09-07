@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Enlarged the preferences preview to make better use of the right pane.
+- Matched preview placement, capacity, icon scale, and occupied cells to the live Shell grid allocation.
+
 ## 1.2.0 — 2026-09-07
 
 - Centralized presets, settings keys, and grid-fit calculations in `config.js`.

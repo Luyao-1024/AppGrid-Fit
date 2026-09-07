@@ -52,5 +52,11 @@
       <summary>Custom column spacing between icon columns</summary>
     </key>
 
+    <key type="s" name="runtime-preview-layout">
+      <default>''</default>
+      <summary>Last measured overview layout</summary>
+      <description>Internal runtime state used to make the preferences preview match the Shell allocation.</description>
+    </key>
+
   </schema>
 </schemalist>

@@ -77,7 +77,7 @@ Switch between presets or disable **Use preset sizes** for granular control. Cus
 
 **Consolidate app pages** is disabled by default. Enabling it fills earlier pages and permanently saves the resulting application order.
 
-The preferences window uses a compact horizontal layout: controls are placed on the left and the monitor preview on the right. Its default size is 1100×500.
+The preferences window uses a horizontal layout with controls on the left and a large monitor preview on the right. While the extension is active, the preview uses the live App Grid allocation and current-page item count from GNOME Shell instead of relying solely on a generic monitor estimate. Its default size is 1200×560.
 
 ## Requirements
 

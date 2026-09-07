@@ -6,6 +6,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js'
 import {
     PRESETS,
     PRESET_WIDTH_RATIO,
+    PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
     UNCONSTRAINED_SPACING,
     computeGridFit,
@@ -25,6 +26,11 @@ export default class AppGridSizeExtension extends Extension {
         this._connectSettings()
         this._overviewShowId =
             Main.overview.connect('showing', () => this._apply())
+        this._overviewShownId = Main.overview.connect('shown', () => {
+            const grid = this._findGrid()
+            if (grid)
+                this._publishPreviewLayout(grid)
+        })
         this._monitorsChangedId = Main.layoutManager.connect(
             'monitors-changed', () => this._onMonitorsChanged())
         this._apply()
@@ -48,6 +54,7 @@ export default class AppGridSizeExtension extends Extension {
         this._notifyIds = []
         this._sigIds = []
         this._overviewShowId = 0
+        this._overviewShownId = 0
         this._monitorsChangedId = 0
         this._allocationId = 0
         this._allocationGrid = null
@@ -64,10 +71,12 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _disconnectOverview() {
-        if (!this._overviewShowId)
-            return
-        Main.overview.disconnect(this._overviewShowId)
+        if (this._overviewShowId)
+            Main.overview.disconnect(this._overviewShowId)
+        if (this._overviewShownId)
+            Main.overview.disconnect(this._overviewShownId)
         this._overviewShowId = 0
+        this._overviewShownId = 0
     }
 
     _disconnectMonitorsChanged() {
@@ -157,8 +166,51 @@ export default class AppGridSizeExtension extends Extension {
                 this._lastAllocation?.height === allocation.height)
                 return
             this._lastAllocation = allocation
+            this._publishPreviewLayout(grid)
             this._scheduleApply()
         })
+    }
+
+    _publishPreviewLayout(grid) {
+        if (!this._settings)
+            return
+
+        const lm = grid.layout_manager
+        const monitor = Main.layoutManager.primaryMonitor
+        const {width, height} = this._getAllocationSize(grid)
+        if (!monitor || width <= 0 || height <= 0)
+            return
+
+        let x = 0
+        let y = 0
+        try {
+            [x, y] = grid.get_transformed_position()
+            x -= monitor.x
+            y -= monitor.y
+        } catch (_error) {}
+
+        const pageIndex = Number.isInteger(grid.currentPage)
+            ? grid.currentPage
+            : 0
+        const itemCount = lm._pages?.[pageIndex]?.visibleChildren?.length ?? 0
+        const padding = lm.page_padding
+        const layout = JSON.stringify({
+            version: 1,
+            monitor: {width: monitor.width, height: monitor.height},
+            grid: {
+                x: Math.round(x),
+                y: Math.round(y),
+                width: Math.round(width),
+                height: Math.round(height),
+                paddingTop: Math.round(padding.top),
+                paddingRight: Math.round(padding.right),
+                paddingBottom: Math.round(padding.bottom),
+                paddingLeft: Math.round(padding.left),
+            },
+            itemCount,
+        })
+        if (this._settings.get_string(PREVIEW_LAYOUT_KEY) !== layout)
+            this._settings.set_string(PREVIEW_LAYOUT_KEY, layout)
     }
 
     _saveOriginalValues(lm, grid) {
@@ -294,6 +346,7 @@ export default class AppGridSizeExtension extends Extension {
             this._activeConfig = config
             this._applyLayout(grid, lm, config)
             this._setupEnforcers(lm)
+            this._publishPreviewLayout(grid)
 
             const consolidate = this._settings.get_boolean('consolidate-pages')
             const pagesChanged = reflowPages(lm, {

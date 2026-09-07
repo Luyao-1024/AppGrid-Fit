@@ -7,6 +7,7 @@ import {
     SETTINGS_KEYS,
     computeGridFit,
     computeGridPixelSize,
+    decodePreviewLayout,
 } from '../config.js'
 
 test('preset values remain stable', () => {
@@ -56,4 +57,23 @@ test('pixel size includes cells and only inter-cell gaps', () => {
 
 test('all settings keys are unique', () => {
     assert.equal(new Set(SETTINGS_KEYS).size, SETTINGS_KEYS.length)
+})
+
+test('runtime preview layout decoding rejects incomplete state', () => {
+    assert.equal(decodePreviewLayout(''), null)
+    assert.equal(decodePreviewLayout('{"version":1}'), null)
+})
+
+test('runtime preview layout decoding accepts measured geometry', () => {
+    const layout = {
+        version: 1,
+        monitor: {width: 2560, height: 1440},
+        grid: {
+            x: 0, y: 280, width: 2048, height: 760,
+            paddingTop: 24, paddingRight: 18,
+            paddingBottom: 24, paddingLeft: 18,
+        },
+        itemCount: 38,
+    }
+    assert.deepEqual(decodePreviewLayout(JSON.stringify(layout)), layout)
 })

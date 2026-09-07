@@ -7,9 +7,11 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 import {
     PRESETS,
     PRESET_WIDTH_RATIO,
+    PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
     computeGridFit,
     computeGridPixelSize,
+    decodePreviewLayout,
 } from './config.js';
 
 const SHELL_PANEL_H = 30;
@@ -150,24 +152,30 @@ function drawMiniWsSection(cr, fx, fW, mwY, mwH, sc) {
 
 function drawGridSection(cr, iaX, iaY, iaW, iaH,
     drawRows, drawCols, fitRows, fitCols,
-    cellW, cellH, gapW, gapH, sc, usePresets) {
+    cellW, cellH, iconW, iconH, gapW, gapH,
+    sc, usePresets, itemCount) {
     const gridW = drawCols * cellW + Math.max(0, drawCols - 1) * gapW;
-    const gridH = drawRows * cellH + Math.max(0, drawRows - 1) * gapH;
     const gx = iaX + (iaW - gridW) / 2;
-    const gy = iaY + (iaH - gridH) / 2;
+    const gy = iaY;
+
+    cr.save();
+    cr.rectangle(iaX, iaY, iaW, iaH);
+    cr.clip();
 
     for (let row = 0; row < drawRows; row++) {
         for (let col = 0; col < drawCols; col++) {
+            const index = row * drawCols + col;
+            const occupied = itemCount === null || index < itemCount;
             const overflow = !usePresets && (row >= fitRows || col >= fitCols);
             cr.setSourceRGBA(
                 overflow ? 0.85 : 0.35,
                 overflow ? 0.30 : 0.55,
                 overflow ? 0.30 : 0.85,
-                overflow ? 0.45 : 0.65);
+                occupied ? (overflow ? 0.45 : 0.65) : 0.12);
             roundedRect(cr,
-                gx + col * (cellW + gapW),
-                gy + row * (cellH + gapH),
-                cellW, cellH, Math.max(1, 3 * sc));
+                gx + col * (cellW + gapW) + (cellW - iconW) / 2,
+                gy + row * (cellH + gapH) + (cellH - iconH) / 2,
+                iconW, iconH, Math.max(1, 3 * sc));
             cr.fill();
         }
     }
@@ -180,10 +188,11 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
         cr.setDash([4, 3], 0);
         cr.rectangle(
             iaX + (iaW - afW) / 2 - 2,
-            iaY + (iaH - afH) / 2 - 2,
+            iaY,
             afW + 4, afH + 4);
         cr.stroke();
     }
+    cr.restore();
 }
 
 function drawDashSection(cr, fx, fW, dY, dH, sc) {
@@ -255,7 +264,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             for (const fn of cleanupFns) fn();
             return false;
         });
-        window.set_default_size(1100, 500);
+        window.set_default_size(1200, 560);
 
         const page = new Adw.PreferencesPage({
             title: 'App Grid',
@@ -265,7 +274,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const pageClamp = findDescendant(page, Adw.Clamp);
         if (pageClamp) {
-            pageClamp.maximum_size = 1200;
+            pageClamp.maximum_size = 1400;
             pageClamp.tightening_threshold = 900;
         }
 
@@ -463,19 +472,23 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         previewFrame.add_css_class('appgrid-fit-wallpaper-preview');
 
         const da = new Gtk.DrawingArea();
-        da.set_content_width(320);
-        da.set_content_height(180);
+        da.set_content_width(560);
+        da.set_content_height(315);
+        da.set_hexpand(true);
+        da.set_vexpand(true);
         previewFrame.append(da);
 
         const aspectFrame = new Gtk.AspectFrame({
             ratio: 16 / 9,
             obey_child: false,
+            hexpand: true,
         });
         aspectFrame.set_child(previewFrame);
 
         const previewClamp = new Adw.Clamp({
-            maximum_size: 440,
-            tightening_threshold: 320,
+            maximum_size: 720,
+            tightening_threshold: 480,
+            hexpand: true,
         });
         previewClamp.set_child(aspectFrame);
 
@@ -556,9 +569,22 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             const config = readGridConfig(settings);
             const {iconSize, rows, columns, rowGap, colGap, usePresets} = config;
-            const mW = ps.monitorW;
-            const mH = ps.monitorH;
+            const runtimeLayout = decodePreviewLayout(
+                settings.get_string(PREVIEW_LAYOUT_KEY));
+            const mW = runtimeLayout?.monitor.width ?? ps.monitorW;
+            const mH = runtimeLayout?.monitor.height ?? ps.monitorH;
             const layout = estimateGridArea(mW, mH);
+            if (runtimeLayout) {
+                const grid = runtimeLayout.grid;
+                layout.iconAreaX = grid.x + grid.paddingLeft;
+                layout.iconAreaYPos = grid.y + grid.paddingTop;
+                layout.iconAreaW = Math.max(100,
+                    grid.width - grid.paddingLeft - grid.paddingRight);
+                layout.iconAreaH = Math.max(100,
+                    grid.height - grid.paddingTop - grid.paddingBottom);
+                layout.dashY = Math.min(mH - layout.dashH,
+                    grid.y + grid.height + layout.spacing);
+            }
             const fit = computeGridFit({
                 width: layout.iconAreaW,
                 height: layout.iconAreaH,
@@ -576,12 +602,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
+                itemCount: runtimeLayout?.itemCount ?? null,
                 monitorW: mW, monitorH: mH,
             });
 
             aspectFrame.ratio = mW / mH;
+            const areaPrefix = runtimeLayout ? 'Live icon area' : 'Estimated icon area';
             screenLabel.label =
-                `Monitor: ${mW} × ${mH}  ·  Icon area: ~${layout.iconAreaW} × ${layout.iconAreaH}`;
+                `Monitor: ${mW} × ${mH}  ·  ${areaPrefix}: ${layout.iconAreaW} × ${layout.iconAreaH}`;
 
             if (usePresets) {
                 fitLabel.label =
@@ -610,6 +638,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             connectSignal(cleanupFns, settings,
                 `changed::${key}`, updatePreview);
         }
+        connectSignal(cleanupFns, settings,
+            `changed::${PREVIEW_LAYOUT_KEY}`, updatePreview);
         const monitors = display?.get_monitors();
         if (monitors)
             connectSignal(cleanupFns, monitors, 'items-changed', updatePreview);
@@ -621,8 +651,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 monitorW, monitorH, panelH, searchH, dashH, miniWsH,
                 searchY, miniWsY, dashY,
                 iconAreaX, iconAreaYPos, iconAreaW, iconAreaH,
-                rows, columns, rowGap, colGap,
-                fitRows, fitCols, usePresets, cellSize,
+                iconSize, rows, columns, rowGap, colGap,
+                fitRows, fitCols, usePresets, cellSize, itemCount,
             } = ps;
 
             const pad = PREVIEW_PADDING;
@@ -659,8 +689,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 iconAreaW * sc, iconAreaH * sc,
                 drawRows, drawCols, fitRows, fitCols,
                 cellSize * sc, cellSize * sc,
+                iconSize * sc, iconSize * sc,
                 colGap * sc, rowGap * sc,
-                sc, usePresets);
+                sc, usePresets, itemCount);
 
             drawDashSection(cr, fx, fW,
                 fy + dashY * sc, dashH * sc, sc);

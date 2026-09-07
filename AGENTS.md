@@ -193,6 +193,7 @@ enable()
   │   ├─ reflowPages(lm, {consolidate})  — move overflow; optionally fill vacancies
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
   ├─ Main.overview.connect('showing')
+  ├─ Main.overview.connect('shown')       — publish settled preview geometry
   └─ Main.layoutManager.connect('monitors-changed')
 
 disable()
@@ -219,8 +220,8 @@ restored on disable or after a partial apply failure.
 ### Layout
 
 The prefs window uses a horizontal `Gtk.Paned` inside a single `Adw.PreferencesRow`.
-`findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1200 so both panes
-receive their natural width. Default window size: 1100×500.
+`findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1400 so both panes
+receive their natural width. Default window size: 1200×560.
 
 ```
 fillPreferencesWindow(window)
@@ -273,7 +274,7 @@ iconAreaH = pageH - 2×SHELL_PAGE_PAD
 | `drawPanelSection(cr, fx, fy, fW, panelH, sc)` | Top panel with Activities, clock, system indicators |
 | `drawSearchSection(cr, fx, fW, sY, sH, sc)` | Search bar with pill-shaped entry |
 | `drawMiniWsSection(cr, fx, fW, mwY, mwH, sc)` | Mini workspace thumbnails |
-| `drawGridSection(cr, iaX, iaY, iaW, iaH, drawRows, drawCols, fitRows, fitCols, cellW, cellH, gapW, gapH, sc, usePresets)` | Icon grid cells (blue normal, red overflow, green capacity border) |
+| `drawGridSection(...)` | Icon grid cells (blue normal, red overflow, dim empty slots, green capacity border) |
 | `drawDashSection(cr, fx, fW, dY, dH, sc)` | Bottom dash with `DOCK_ICON_COUNT` dock icons |
 
 All section functions receive scaled coordinates from the main draw callback.
@@ -287,9 +288,15 @@ fitCols = max(MIN_GRID_DIMENSION, floor((effectiveW + colGap) / (cellSize + colG
 fitRows = max(MIN_GRID_DIMENSION, floor((iconAreaH + rowGap) / (cellSize + rowGap)))
 ```
 
-In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`),
-matching the extension's runtime behavior. In custom mode, it draws the user's
-configured `rows×columns` with overflow cells in red.
+When available, the preview uses `runtime-preview-layout`, which the extension updates with
+the live monitor, grid allocation, page padding, and current-page item count. This keeps grid
+placement and visual density aligned with the Shell overview. Before a live snapshot exists,
+the preview falls back to `estimateGridArea()`.
+
+In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`). In
+custom mode, it draws the user's configured `rows×columns` with overflow cells in red. Empty
+capacity is dimmed, and the visible icon uses `iconSize` while cell placement continues to use
+`iconSize + TILE_PADDING`.
 
 **Monitor detection** prefers the monitor containing the preferences window, falls back to
 the first display monitor, and finally to 1920×1080.
@@ -301,7 +308,7 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 
 ## GSettings Schema
 
-8 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+9 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
@@ -313,6 +320,7 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 | `custom-columns` | int | `9` | 2–20 |
 | `custom-row-spacing` | int | `12` | 0–200 |
 | `custom-column-spacing` | int | `12` | 0–200 |
+| `runtime-preview-layout` | string | `''` | Internal live Shell layout snapshot for the preview |
 
 After modifying the schema XML, recompile: `glib-compile-schemas schemas/`
 
