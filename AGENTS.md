@@ -302,7 +302,8 @@ fallback placement remains accurate for presets, arbitrary custom sizes, themes,
 scaling even before settled actor positions are available. If the extension cannot provide
 that measurement, the preview uses `iconSize + 53`. Its fallback item count
 comes from `org.gnome.shell`'s `app-picker-layout`, where folders are already single top-level
-items; oversized stored pages are split at the default 24-item boundary.
+items. With consolidation disabled, oversized stored pages are split at the default 24-item
+boundary; with consolidation enabled, the preview preserves Shell's newly saved boundaries.
 Folder styling is never inferred from an item's position. The fallback joins each
 `app-picker-layout` item ID with `org.gnome.desktop.app-folders`'s `folder-children`; the live
 snapshot identifies folder actors directly. Both settings sources trigger preview redraws.

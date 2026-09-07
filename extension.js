@@ -316,6 +316,7 @@ export default class AppGridSizeExtension extends Extension {
                 ...(Number.isFinite(this._activeConfig.tileSize)
                     ? {tileSize: this._activeConfig.tileSize}
                     : {}),
+                consolidate: this._activeConfig.consolidate,
             } : null,
             items,
             panelRect: this._measureActor(Main.panel, monitor),
@@ -467,11 +468,11 @@ export default class AppGridSizeExtension extends Extension {
             if (config.autoFit)
                 config = this._computeAutoFit(grid, lm, config)
 
-            this._activeConfig = config
+            const consolidate = this._settings.get_boolean('consolidate-pages')
+            this._activeConfig = {...config, consolidate}
             this._applyLayout(grid, lm, config)
             this._setupEnforcers(lm)
 
-            const consolidate = this._settings.get_boolean('consolidate-pages')
             const pagesChanged = reflowPages(lm, {
                 consolidate,
                 warn: message => console.warn(`[appgrid-size] ${message}`),

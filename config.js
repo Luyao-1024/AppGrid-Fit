@@ -86,6 +86,15 @@ export function splitPageItems(pages, capacity = DEFAULT_PAGE_CAPACITY) {
     return result.length ? result : [[]]
 }
 
+export function resolvePreviewPages(pages, consolidate,
+    capacity = DEFAULT_PAGE_CAPACITY) {
+    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page)))
+        return []
+    if (consolidate)
+        return pages.length ? pages : [[]]
+    return splitPageItems(pages, capacity)
+}
+
 export function decodePreviewLayout(value) {
     try {
         const layout = JSON.parse(value)
@@ -126,6 +135,8 @@ export function decodePreviewLayout(value) {
                 layout.config?.tileSize !== undefined &&
                     (!Number.isFinite(layout.config.tileSize) ||
                         layout.config.tileSize <= 0) ||
+                layout.config?.consolidate !== undefined &&
+                    typeof layout.config.consolidate !== 'boolean' ||
                 layout.pageItemCounts !== undefined &&
                     (!Array.isArray(layout.pageItemCounts) ||
                         layout.pageItemCounts.some(count =>

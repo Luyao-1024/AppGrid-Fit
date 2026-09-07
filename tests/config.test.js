@@ -10,6 +10,7 @@ import {
     computeGridPixelSize,
     computePreviewTileSize,
     decodePreviewLayout,
+    resolvePreviewPages,
     splitPageItemCounts,
     splitPageItems,
 } from '../config.js'
@@ -94,6 +95,16 @@ test('fallback page items preserve automatic folder identities', () => {
     ])
 })
 
+test('preview pages follow consolidated Shell boundaries', () => {
+    const apps = Array.from({length: 38}, (_value, id) => ({id}))
+    assert.deepEqual(
+        resolvePreviewPages([apps], false).map(page => page.length),
+        [24, 14])
+    assert.deepEqual(
+        resolvePreviewPages([apps], true).map(page => page.length),
+        [38])
+})
+
 test('all settings keys are unique', () => {
     assert.equal(new Set(SETTINGS_KEYS).size, SETTINGS_KEYS.length)
 })
@@ -130,6 +141,7 @@ test('runtime preview layout decoding accepts measured Shell actors', () => {
         config: {
             iconSize: 64, rows: 6, columns: 12,
             rowGap: 18, columnGap: 18, tileSize: 117,
+            consolidate: true,
         },
         pageItemCounts: [2, 1],
         pageCount: 2,

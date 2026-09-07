@@ -14,7 +14,7 @@ import {
     computeGridPixelSize,
     computePreviewTileSize,
     decodePreviewLayout,
-    splitPageItems,
+    resolvePreviewPages,
 } from './config.js';
 
 const SHELL_PANEL_H = 30;
@@ -393,7 +393,7 @@ function readGridConfig(settings) {
     };
 }
 
-function readFallbackPages(shellSettings, folderSettings) {
+function readFallbackPages(shellSettings, folderSettings, consolidate) {
     try {
         const pages = shellSettings.get_value('app-picker-layout').deepUnpack();
         const folderIds = new Set(folderSettings.get_strv('folder-children'));
@@ -411,7 +411,7 @@ function readFallbackPages(shellSettings, folderSettings) {
                 return {id, position, folder: folderIds.has(id)};
             }).sort((a, b) => a.position - b.position);
         });
-        return splitPageItems(pageItems);
+        return resolvePreviewPages(pageItems, consolidate);
     } catch (_e) {
         try {
             const apps = Gio.AppInfo.get_all()
@@ -419,7 +419,7 @@ function readFallbackPages(shellSettings, folderSettings) {
                 .map((app, position) => ({
                     id: app.get_id(), position, folder: false,
                 }));
-            return splitPageItems([apps]);
+            return resolvePreviewPages([apps], consolidate);
         } catch (_error) {
             return [Array.from({length: DEFAULT_PAGE_CAPACITY},
                 (_value, position) => ({position, folder: false}))];
@@ -747,6 +747,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             const config = readGridConfig(settings);
             const {iconSize, rows, columns, rowGap, colGap, usePresets} = config;
+            const consolidate = settings.get_boolean('consolidate-pages');
             const runtimeLayout = decodePreviewLayout(
                 settings.get_string(PREVIEW_LAYOUT_KEY));
             const mW = runtimeLayout?.monitor.width ?? ps.monitorW;
@@ -785,22 +786,30 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 : null;
             const activeRows = usePresets ? fitRows : rows;
             const activeColumns = usePresets ? fitCols : columns;
-            const measuredItemsMatch = runtimeLayout?.version === 2 &&
-                runtimeLayout.settled === true &&
+            const runtimeConfigMatches = runtimeLayout?.version === 2 &&
                 runtimeConfig?.iconSize === iconSize &&
                 runtimeConfig?.rows === activeRows &&
                 runtimeConfig?.columns === activeColumns &&
                 runtimeConfig?.rowGap === rowGap &&
-                runtimeConfig?.columnGap === colGap;
-            const fallbackPages = readFallbackPages(shellSettings, folderSettings);
+                runtimeConfig?.columnGap === colGap &&
+                runtimeConfig?.consolidate === consolidate;
+            const measuredItemsMatch = runtimeConfigMatches &&
+                runtimeLayout.settled === true;
+            const fallbackPages = readFallbackPages(
+                shellSettings, folderSettings, consolidate);
             const fallbackPageCounts = fallbackPages.map(page => page.length);
-            const pageItemCounts = runtimeLayout?.pageItemCounts ??
-                fallbackPageCounts;
+            const runtimePagesMatch = runtimeConfigMatches &&
+                Array.isArray(runtimeLayout.pageItemCounts);
+            const pageItemCounts = runtimePagesMatch
+                ? runtimeLayout.pageItemCounts
+                : fallbackPageCounts;
             const currentPage = Math.min(
-                runtimeLayout?.currentPage ?? 0, pageItemCounts.length - 1);
+                runtimePagesMatch ? runtimeLayout.currentPage ?? 0 : 0,
+                pageItemCounts.length - 1);
             const itemCount = pageItemCounts[currentPage] ??
-                runtimeLayout?.itemCount ?? 0;
-            const gridItems = runtimeLayout?.items?.length === itemCount
+                (runtimePagesMatch ? runtimeLayout.itemCount : 0);
+            const gridItems = runtimePagesMatch &&
+                runtimeLayout.items?.length === itemCount
                 ? runtimeLayout.items
                 : fallbackPages[currentPage] ?? [];
             Object.assign(ps, layout, {
