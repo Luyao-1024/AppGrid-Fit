@@ -70,17 +70,32 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv "$RUNNER_TEMP/shexli-venv"
-          "$RUNNER_TEMP/shexli-venv/bin/pip" install --upgrade pip shexli
-          set +e
+          "$RUNNER_TEMP/shexli-venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/shexli-venv/bin/pip" install \
+            'shexli==0.2.1' 'tree-sitter==0.25.2'
+          report="$RUNNER_TEMP/shexli-report.json"
           "$RUNNER_TEMP/shexli-venv/bin/shexli" \
-            "${{ steps.package.outputs.archive }}"
-          shexli_status=$?
-          set -e
-          if [ "$shexli_status" -eq 139 ]; then
-            echo '::warning::Shexli crashed with SIGSEGV; repository package checks passed and remain blocking.'
-          else
-            exit "$shexli_status"
-          fi
+            --format json "${{ steps.package.outputs.archive }}" > "$report"
+          python - "$report" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding='utf-8') as stream:
+              report = json.load(stream)
+
+          summary = report['summary']
+          print(
+              f"Shexli: {summary['status']} "
+              f"({summary['finding_count']} findings)"
+          )
+          for finding in report['findings']:
+              print(
+                  f"{finding['severity'].upper()} {finding['rule_id']}: "
+                  f"{finding['title']} — {finding['message']}"
+              )
+          if summary['finding_count']:
+              raise SystemExit(1)
+          PY
 
       - name: Upload validated extension
         uses: actions/upload-artifact@v7
