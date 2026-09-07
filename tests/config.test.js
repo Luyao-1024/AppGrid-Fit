@@ -59,10 +59,20 @@ test('pixel size includes cells and only inter-cell gaps', () => {
     })
 })
 
-test('preview tile size scales with the selected icon size', () => {
+test('preview tile size scales with arbitrary icon sizes as a fallback', () => {
+    assert.equal(computePreviewTileSize(16), 69)
     assert.equal(computePreviewTileSize(32), 85)
+    assert.equal(computePreviewTileSize(47), 100)
     assert.equal(computePreviewTileSize(64), 117)
     assert.equal(computePreviewTileSize(96), 149)
+    assert.equal(computePreviewTileSize(160), 213)
+})
+
+test('measured Shell tile size overrides the fallback at any icon size', () => {
+    assert.equal(computePreviewTileSize(32, 87), 87)
+    assert.equal(computePreviewTileSize(73, 128), 128)
+    assert.equal(computePreviewTileSize(96, 151.5), 151.5)
+    assert.equal(computePreviewTileSize(64, Number.NaN), 117)
 })
 
 test('fallback page counts preserve Shell page boundaries and overflow', () => {
@@ -117,6 +127,10 @@ test('runtime preview layout decoding accepts measured Shell actors', () => {
             paddingBottom: 24, paddingLeft: 274,
         },
         itemCount: 2,
+        config: {
+            iconSize: 64, rows: 6, columns: 12,
+            rowGap: 18, columnGap: 18, tileSize: 117,
+        },
         pageItemCounts: [2, 1],
         pageCount: 2,
         currentPage: 0,
@@ -154,6 +168,21 @@ test('runtime preview layout decoding rejects invalid actor rectangles', () => {
         },
         itemCount: 1,
         items: [{tile: {x: 10, y: 10, width: -1, height: 100}}],
+    }
+    assert.equal(decodePreviewLayout(JSON.stringify(layout)), null)
+})
+
+test('runtime preview layout decoding rejects an invalid measured tile size', () => {
+    const layout = {
+        version: 2,
+        monitor: {width: 1920, height: 1080},
+        grid: {
+            x: 0, y: 200, width: 1920, height: 600,
+            paddingTop: 24, paddingRight: 210,
+            paddingBottom: 24, paddingLeft: 210,
+        },
+        itemCount: 0,
+        config: {tileSize: -10},
     }
     assert.equal(decodePreviewLayout(JSON.stringify(layout)), null)
 })

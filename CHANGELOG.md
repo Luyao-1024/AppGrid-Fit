@@ -8,7 +8,7 @@
 - Calibrated the fallback tile, workspace, and compact Dock proportions against a 2560×1440 overview capture.
 - Matched preview icon counts to Shell's real per-page items, including folders and preserved 24-item page boundaries.
 - Detected every preview folder from Shell folder IDs instead of assuming fixed grid positions.
-- Scaled fallback tile dimensions with icon size so Tiny shows all 20 columns and 24 visible apps.
+- Read Shell's preferred tile size after every icon-size change so all preset and custom sizes use accurate preview spacing; retain an icon-scaled fallback when live measurement is unavailable.
 
 ## 1.2.0 — 2026-09-07
 

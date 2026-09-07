@@ -780,6 +780,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             } = fit;
 
             const runtimeConfig = runtimeLayout?.config;
+            const measuredTileSize = runtimeConfig?.iconSize === iconSize
+                ? runtimeConfig.tileSize ?? null
+                : null;
             const activeRows = usePresets ? fitRows : rows;
             const activeColumns = usePresets ? fitCols : columns;
             const measuredItemsMatch = runtimeLayout?.version === 2 &&
@@ -803,7 +806,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
-                previewCellSize: computePreviewTileSize(iconSize),
+                previewCellSize: computePreviewTileSize(
+                    iconSize, measuredTileSize),
                 itemCount,
                 gridItems,
                 measuredItems: measuredItemsMatch ? runtimeLayout.items : null,

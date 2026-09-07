@@ -4,7 +4,7 @@ export const MIN_GRID_DIMENSION = 2
 export const PRESET_WIDTH_RATIO = 2 / 3
 export const PREVIEW_LAYOUT_KEY = 'runtime-preview-layout'
 export const DEFAULT_PAGE_CAPACITY = 24
-export const PREVIEW_TILE_OVERHEAD = 53
+export const FALLBACK_PREVIEW_TILE_OVERHEAD = 53
 
 export const SETTINGS_KEYS = [
     'use-presets', 'preset-level', 'consolidate-pages',
@@ -46,8 +46,11 @@ export function computeGridPixelSize(rows, columns, cellSize, rowGap, columnGap)
     }
 }
 
-export function computePreviewTileSize(iconSize) {
-    return Math.max(0, iconSize) + PREVIEW_TILE_OVERHEAD
+export function computePreviewTileSize(iconSize, measuredTileSize = null) {
+    const safeIconSize = Math.max(0, iconSize)
+    if (Number.isFinite(measuredTileSize) && measuredTileSize > 0)
+        return Math.max(safeIconSize, measuredTileSize)
+    return safeIconSize + FALLBACK_PREVIEW_TILE_OVERHEAD
 }
 
 export function splitPageItemCounts(pageItemCounts,
@@ -120,6 +123,9 @@ export function decodePreviewLayout(value) {
             if (!validRect(layout.searchRect) || !validRect(layout.dashRect) ||
                 !validRect(layout.panelRect) || hasInvalidRectList ||
                 layout.items?.some(item => !validRect(item.icon)) ||
+                layout.config?.tileSize !== undefined &&
+                    (!Number.isFinite(layout.config.tileSize) ||
+                        layout.config.tileSize <= 0) ||
                 layout.pageItemCounts !== undefined &&
                     (!Array.isArray(layout.pageItemCounts) ||
                         layout.pageItemCounts.some(count =>

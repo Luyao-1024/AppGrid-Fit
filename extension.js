@@ -218,11 +218,29 @@ export default class AppGridSizeExtension extends Extension {
                 rect.height < monitor.height * 0.5)
     }
 
+    _measurePreferredTileSize(lm) {
+        let tileSize = 0
+        for (const page of lm._pages ?? []) {
+            for (const actor of page.visibleChildren ?? []) {
+                try {
+                    const minWidth = actor.get_preferred_width(-1)[0]
+                    const minHeight = actor.get_preferred_height(-1)[0]
+                    if (Number.isFinite(minWidth) && Number.isFinite(minHeight))
+                        tileSize = Math.max(tileSize, minWidth, minHeight)
+                } catch (_error) {}
+            }
+        }
+        return tileSize > 0 ? Math.ceil(tileSize) : null
+    }
+
     _publishPreviewLayout(grid, settled = false) {
         if (!this._settings)
             return
 
         const lm = grid.layout_manager
+        const tileSize = this._measurePreferredTileSize(lm)
+        if (this._activeConfig && tileSize)
+            this._activeConfig.tileSize = tileSize
         const monitor = Main.layoutManager.primaryMonitor
         const {width, height} = this._getAllocationSize(grid)
         if (!monitor || width <= 0 || height <= 0)
@@ -295,6 +313,9 @@ export default class AppGridSizeExtension extends Extension {
                 columns: this._activeConfig.columns,
                 rowGap: this._activeConfig.rowGap,
                 columnGap: this._activeConfig.columnGap,
+                ...(Number.isFinite(this._activeConfig.tileSize)
+                    ? {tileSize: this._activeConfig.tileSize}
+                    : {}),
             } : null,
             items,
             panelRect: this._measureActor(Main.panel, monitor),
@@ -449,7 +470,6 @@ export default class AppGridSizeExtension extends Extension {
             this._activeConfig = config
             this._applyLayout(grid, lm, config)
             this._setupEnforcers(lm)
-            this._publishPreviewLayout(grid)
 
             const consolidate = this._settings.get_boolean('consolidate-pages')
             const pagesChanged = reflowPages(lm, {
@@ -460,6 +480,7 @@ export default class AppGridSizeExtension extends Extension {
                 this._savePages()
 
             this._forceRelayout(grid)
+            this._publishPreviewLayout(grid)
         } catch (error) {
             this._disconnectGridBindings()
             this._restoreOriginalLayout()
