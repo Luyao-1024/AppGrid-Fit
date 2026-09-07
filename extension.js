@@ -10,6 +10,7 @@ import {
     SETTINGS_KEYS,
     UNCONSTRAINED_SPACING,
     computeGridFit,
+    computePreviewTileSize,
 } from './config.js'
 import {reflowPages} from './gridPages.js'
 
@@ -202,6 +203,13 @@ export default class AppGridSizeExtension extends Extension {
         return null
     }
 
+    _getPreviewItemId(actor) {
+        const app = actor?.app ?? actor?.icon?.app
+        const id = app?.get_id?.() ?? actor?._folderId ??
+            actor?.folderId ?? actor?._id ?? actor?.id
+        return typeof id === 'string' && id ? id : null
+    }
+
     _measureWorkspaceActors(controls, monitor) {
         const views = controls?._workspacesDisplay?._workspacesViews
         if (!Array.isArray(views))
@@ -233,14 +241,34 @@ export default class AppGridSizeExtension extends Extension {
         return tileSize > 0 ? Math.ceil(tileSize) : null
     }
 
+    _syncIconSize(lm) {
+        let iconSize = lm.fixed_icon_size
+        if (typeof lm._findBestIconSize === 'function')
+            iconSize = lm._findBestIconSize()
+        if (!Number.isFinite(iconSize) || iconSize < 0)
+            return
+        if (lm._iconSize !== iconSize) {
+            lm._iconSize = iconSize
+            if (lm._container) {
+                for (const child of lm._container)
+                    child.icon?.setIconSize(iconSize)
+            }
+        }
+        if ('_childrenMaxSize' in lm)
+            lm._childrenMaxSize = -1
+    }
+
     _publishPreviewLayout(grid, settled = false) {
         if (!this._settings)
             return
 
         const lm = grid.layout_manager
         const tileSize = this._measurePreferredTileSize(lm)
-        if (this._activeConfig && tileSize)
+        if (this._activeConfig && tileSize &&
+            this._activeConfig.tileSize !== tileSize) {
             this._activeConfig.tileSize = tileSize
+            this._scheduleApply()
+        }
         const monitor = Main.layoutManager.primaryMonitor
         const {width, height} = this._getAllocationSize(grid)
         if (!monitor || width <= 0 || height <= 0)
@@ -262,6 +290,7 @@ export default class AppGridSizeExtension extends Extension {
         const controls = this._getControlsManager()
         const pageItems = lm._pages?.[pageIndex]?.visibleChildren ?? []
         const items = pageItems.map(actor => ({
+            id: this._getPreviewItemId(actor),
             tile: this._measureActor(actor, monitor),
             icon: this._firstMeasuredActor([
                 actor?.icon?.icon,
@@ -391,6 +420,7 @@ export default class AppGridSizeExtension extends Extension {
             width: width - padding.left - padding.right,
             height: height - padding.top - padding.bottom,
             iconSize: config.iconSize,
+            tileSize: config.tileSize,
             rowGap: config.rowGap,
             columnGap: config.columnGap,
             widthRatio: PRESET_WIDTH_RATIO,
@@ -465,6 +495,13 @@ export default class AppGridSizeExtension extends Extension {
             this._applied = true
 
             let config = this._readGridConfig()
+            lm.fixed_icon_size = config.iconSize
+            this._syncIconSize(lm)
+            config = {
+                ...config,
+                tileSize: this._measurePreferredTileSize(lm) ??
+                    computePreviewTileSize(config.iconSize),
+            }
             if (config.autoFit)
                 config = this._computeAutoFit(grid, lm, config)
 
@@ -535,16 +572,7 @@ export default class AppGridSizeExtension extends Extension {
 
     _forceRelayout(grid) {
         const lm = grid.layout_manager
-        if (typeof lm._findBestIconSize === 'function') {
-            const iconSize = lm._findBestIconSize()
-            if (lm._iconSize !== iconSize) {
-                lm._iconSize = iconSize
-                if (lm._container) {
-                    for (const child of lm._container)
-                        child.icon?.setIconSize(iconSize)
-                }
-            }
-        }
+        this._syncIconSize(lm)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()

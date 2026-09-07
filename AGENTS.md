@@ -55,7 +55,7 @@ calculations used by both runtime and preferences code.
 |---|---|---|
 | `TILE_PADDING` | `24` | `.overview-tile` CSS padding (12px per side) |
 | `MIN_GRID_DIMENSION` | `2` | Minimum rows/columns |
-| `PRESET_WIDTH_RATIO` | `2/3` | Portion of available width used for balanced-fit columns |
+| `PRESET_WIDTH_RATIO` | `4/5` | Portion of available width used for balanced-fit columns |
 | `UNCONSTRAINED_SPACING` | `-1` | max_row/column_spacing value to disable limit |
 | `DEFAULT_PAGE_CAPACITY` | `24` | Shell's default 4×6 boundary used to split fallback page counts |
 | `FALLBACK_PREVIEW_TILE_OVERHEAD` | `53` | Fallback Shell tile overhead when no live preferred size exists |
@@ -101,11 +101,12 @@ Used by `estimateGridArea()` to approximate the GNOME Shell overview layout:
 ### Balanced-fit presets
 
 When preset mode is active, `_apply()` → `_readGridConfig()` → `_computeAutoFit()` reads
-the grid's allocation box and computes rows/columns using two thirds of available width.
-The cell size accounts for `.overview-tile` CSS padding:
+the grid's allocation box and computes rows/columns using four fifths of available width.
+The runtime first applies the requested icon size and measures Shell's preferred square tile,
+which includes the icon, label, label spacing, and `.overview-tile` CSS padding:
 
 ```
-cellSize = iconSize + TILE_PADDING
+cellSize = measuredTileSize ?? iconSize + FALLBACK_PREVIEW_TILE_OVERHEAD
 effectiveW = round(availW × PRESET_WIDTH_RATIO)
 maxCols = max(MIN_GRID_DIMENSION, floor((effectiveW + colGap) / (cellSize + colGap)))
 maxRows = max(MIN_GRID_DIMENSION, floor((availH + rowGap) / (cellSize + rowGap)))
@@ -286,14 +287,14 @@ All section functions receive scaled coordinates from the main draw callback.
 **Grid fit** uses `computeGridFit()` from `config.js`:
 
 ```
-cellSize = iconSize + TILE_PADDING
+cellSize = measuredTileSize ?? iconSize + FALLBACK_PREVIEW_TILE_OVERHEAD
 effectiveW = usePresets ? round(iconAreaW × PRESET_WIDTH_RATIO) : iconAreaW
 fitCols = max(MIN_GRID_DIMENSION, floor((effectiveW + colGap) / (cellSize + colGap)))
 fitRows = max(MIN_GRID_DIMENSION, floor((iconAreaH + rowGap) / (cellSize + rowGap)))
 ```
 
 When available, the preview uses `runtime-preview-layout`, which the extension updates with
-the live monitor, grid allocation, page padding, current-page item count, and measured actor
+the live monitor, grid allocation, page padding, current-page item count, item IDs, and measured actor
 rectangles for every visible app tile and icon, the search entry, workspace thumbnails, and
 Dash items. Settled actor geometry is captured while the overview is visible, so opening the
 overview once after changing the layout gives the preferences preview exact Shell positions.
@@ -307,11 +308,13 @@ boundary; with consolidation enabled, the preview preserves Shell's newly saved 
 Folder styling is never inferred from an item's position. The fallback joins each
 `app-picker-layout` item ID with `org.gnome.desktop.app-folders`'s `folder-children`; the live
 snapshot identifies folder actors directly. Both settings sources trigger preview redraws.
+Preview icon colors are selected deterministically from application or folder IDs, so they
+remain stable across redraws without repeating in row or column bands.
 
 In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`). In
 custom mode, it draws the user's configured `rows×columns` with overflow cells in red. Empty
 capacity is dimmed, and the visible icon uses `iconSize` while cell placement continues to use
-`iconSize + TILE_PADDING`.
+the same measured or fallback tile size used by runtime fitting.
 
 **Monitor detection** prefers the monitor containing the preferences window, falls back to
 the first display monitor, and finally to 1920×1080.

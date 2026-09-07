@@ -1,7 +1,7 @@
 export const TILE_PADDING = 24
 export const UNCONSTRAINED_SPACING = -1
 export const MIN_GRID_DIMENSION = 2
-export const PRESET_WIDTH_RATIO = 2 / 3
+export const PRESET_WIDTH_RATIO = 4 / 5
 export const PREVIEW_LAYOUT_KEY = 'runtime-preview-layout'
 export const DEFAULT_PAGE_CAPACITY = 24
 export const FALLBACK_PREVIEW_TILE_OVERHEAD = 53
@@ -23,11 +23,14 @@ export function computeGridFit({
     width,
     height,
     iconSize,
+    tileSize = null,
     rowGap,
     columnGap,
     widthRatio = 1,
 }) {
-    const cellSize = iconSize + TILE_PADDING
+    const cellSize = Number.isFinite(tileSize) && tileSize > 0
+        ? Math.max(iconSize, tileSize)
+        : iconSize + TILE_PADDING
     const effectiveWidth = Math.round(Math.max(0, width) * widthRatio)
     return {
         rows: Math.max(MIN_GRID_DIMENSION,
@@ -51,6 +54,19 @@ export function computePreviewTileSize(iconSize, measuredTileSize = null) {
     if (Number.isFinite(measuredTileSize) && measuredTileSize > 0)
         return Math.max(safeIconSize, measuredTileSize)
     return safeIconSize + FALLBACK_PREVIEW_TILE_OVERHEAD
+}
+
+export function computePreviewColorIndex(key, colorCount, variation = 0) {
+    if (!Number.isInteger(colorCount) || colorCount < 1)
+        return 0
+    const value = `${String(key ?? '')}:${variation}`
+    let hash = 2166136261
+    for (let index = 0; index < value.length; index++) {
+        hash ^= value.charCodeAt(index)
+        hash = Math.imul(hash, 16777619)
+    }
+    hash ^= hash >>> 16
+    return (hash >>> 0) % colorCount
 }
 
 export function splitPageItemCounts(pageItemCounts,

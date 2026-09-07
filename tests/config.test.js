@@ -6,6 +6,7 @@ import {
     PRESETS,
     PRESET_WIDTH_RATIO,
     SETTINGS_KEYS,
+    computePreviewColorIndex,
     computeGridFit,
     computeGridPixelSize,
     computePreviewTileSize,
@@ -24,7 +25,7 @@ test('preset values remain stable', () => {
     ])
 })
 
-test('balanced fit uses two thirds of the available width', () => {
+test('balanced fit uses four fifths of the available width', () => {
     const fit = computeGridFit({
         width: 1500,
         height: 648,
@@ -35,9 +36,27 @@ test('balanced fit uses two thirds of the available width', () => {
     })
     assert.deepEqual(fit, {
         rows: 6,
-        columns: 9,
+        columns: 11,
         cellSize: 88,
-        effectiveWidth: 1000,
+        effectiveWidth: 1200,
+    })
+})
+
+test('balanced fit uses the measured Shell tile size when available', () => {
+    const fit = computeGridFit({
+        width: 2012,
+        height: 926,
+        iconSize: 32,
+        tileSize: 85,
+        rowGap: 10,
+        columnGap: 10,
+        widthRatio: PRESET_WIDTH_RATIO,
+    })
+    assert.deepEqual(fit, {
+        rows: 9,
+        columns: 17,
+        cellSize: 85,
+        effectiveWidth: 1610,
     })
 })
 
@@ -74,6 +93,17 @@ test('measured Shell tile size overrides the fallback at any icon size', () => {
     assert.equal(computePreviewTileSize(73, 128), 128)
     assert.equal(computePreviewTileSize(96, 151.5), 151.5)
     assert.equal(computePreviewTileSize(64, Number.NaN), 117)
+})
+
+test('preview colors are stable without repeating by grid column', () => {
+    const firstRow = Array.from({length: 12}, (_value, index) =>
+        computePreviewColorIndex(`app-${index}`, 12))
+    const secondRow = Array.from({length: 12}, (_value, index) =>
+        computePreviewColorIndex(`app-${index + 12}`, 12))
+    assert.deepEqual(firstRow, Array.from({length: 12}, (_value, index) =>
+        computePreviewColorIndex(`app-${index}`, 12)))
+    assert.notDeepEqual(secondRow, firstRow)
+    assert.ok(new Set([...firstRow, ...secondRow]).size >= 8)
 })
 
 test('fallback page counts preserve Shell page boundaries and overflow', () => {

@@ -2,12 +2,12 @@
 
 A GNOME Shell extension (46–50) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
-Current version: **1.3.0**
+Current version: **1.3.1**
 
 ## Features
 
 - **4 preset levels**: Large (96px), Medium (64px), Small (48px), Tiny (32px)
-- **Balanced fit**: Presets calculate rows/columns from your screen while using two thirds of the available width for a centered layout
+- **Balanced fit**: Presets calculate rows/columns from your screen and Shell's full app-tile size while using 80% of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
 - **Responsive layout**: Recalculates preset capacity when the overview allocation or monitor configuration changes
@@ -33,7 +33,7 @@ Current version: **1.3.0**
 
 ## Presets
 
-Presets use balanced fitting — the rows/columns below are base recommendations, while the actual grid is calculated from the current allocation at runtime. Balanced fitting intentionally uses two thirds of the available icon-area width so the grid remains compact and centered.
+Presets use balanced fitting — the rows/columns below are base recommendations, while the actual grid is calculated from the current allocation at runtime. Balanced fitting uses 80% of the available icon-area width, leaving roughly 10% breathing room on each side without wasting a large central workspace.
 
 | Level | Icon Size | Base Grid | Gap |
 |-------|-----------|-----------|-----|
@@ -77,7 +77,7 @@ Switch between presets or disable **Use preset sizes** for granular control. Cus
 
 **Consolidate app pages** is disabled by default. Enabling it fills earlier pages and permanently saves the resulting application order.
 
-The preferences window uses a horizontal layout with controls on the left and a large monitor preview on the right. While the extension is active, the preview uses measured App Grid tiles, icons, per-page item counts, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. Its default size is 1200×560.
+The preferences window uses a horizontal layout with controls on the left and a large monitor preview on the right. While the extension is active, the preview uses measured App Grid tiles, icons, per-page item counts, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Preview colors are varied deterministically from each application or folder ID, avoiding row or column color bands without flickering between redraws. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. Its default size is 1200×560.
 
 ## Requirements
 

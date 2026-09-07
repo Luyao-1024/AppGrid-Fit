@@ -10,6 +10,7 @@ import {
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    computePreviewColorIndex,
     computeGridFit,
     computeGridPixelSize,
     computePreviewTileSize,
@@ -179,10 +180,18 @@ function drawMiniWsSection(cr, fx, fy, fW, mwY, mwH, sc,
 const ICON_COLORS = [
     [0.20, 0.52, 0.92], [0.24, 0.72, 0.42], [0.86, 0.32, 0.34],
     [0.62, 0.38, 0.88], [0.95, 0.59, 0.18], [0.16, 0.68, 0.75],
+    [0.91, 0.36, 0.64], [0.55, 0.72, 0.20], [0.32, 0.40, 0.86],
+    [0.92, 0.45, 0.22], [0.12, 0.62, 0.52], [0.82, 0.68, 0.18],
 ];
 
-function drawAppGlyph(cr, x, y, width, height, index, folder, alpha = 0.9) {
-    const [r, g, b] = ICON_COLORS[index % ICON_COLORS.length];
+function previewIconColor(key, variation = 0) {
+    return ICON_COLORS[computePreviewColorIndex(
+        key, ICON_COLORS.length, variation)];
+}
+
+function drawAppGlyph(cr, x, y, width, height, index, folder,
+    alpha = 0.9, colorKey = index) {
+    const [r, g, b] = previewIconColor(colorKey);
     if (folder) {
         cr.setSourceRGBA(0.42, 0.49, 0.64, alpha * 0.72);
         roundedRect(cr, x, y, width, height, Math.max(1, width * 0.16));
@@ -193,7 +202,8 @@ function drawAppGlyph(cr, x, y, width, height, index, folder, alpha = 0.9) {
         const sy = y + (height - mini * 2 - gap) / 2;
         for (let row = 0; row < 2; row++) {
             for (let col = 0; col < 2; col++) {
-                const color = ICON_COLORS[(index + row * 2 + col) % ICON_COLORS.length];
+                const color = previewIconColor(
+                    colorKey, row * 2 + col + 1);
                 cr.setSourceRGBA(...color, alpha);
                 roundedRect(cr, sx + col * (mini + gap), sy + row * (mini + gap),
                     mini, mini, Math.max(1, mini * 0.15));
@@ -233,7 +243,8 @@ function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
             ? tile.width * sc : item.icon?.width * sc || fallbackIconW;
         const ih = item.folder
             ? tile.height * sc : item.icon?.height * sc || fallbackIconH;
-        drawAppGlyph(cr, ix, iy, iw, ih, index, item.folder);
+        drawAppGlyph(cr, ix, iy, iw, ih, index, item.folder,
+            0.9, item.id ?? `grid-${index}`);
 
         const labelW = Math.min(tile.width * 0.72, Math.max(20, iconSize * 0.9)) * sc;
         const labelH = Math.max(1, 3 * sc);
@@ -271,7 +282,8 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
                 const glyphW = folder ? cellW : iconW;
                 const glyphH = folder ? cellH : iconH;
                 drawAppGlyph(cr, glyphX, glyphY, glyphW, glyphH,
-                    index, folder, overflow ? 0.48 : 0.86);
+                    index, folder, overflow ? 0.48 : 0.86,
+                    items?.[index]?.id ?? `grid-${index}`);
                 cr.setSourceRGBA(0.9, 0.92, 0.96, overflow ? 0.3 : 0.52);
                 const labelW = iconW * 0.78;
                 const labelH = Math.max(1, 3 * sc);
@@ -339,7 +351,7 @@ function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
             drawAppGlyph(cr,
                 fx + rect.x * sc, fy + rect.y * sc,
                 rect.width * sc, rect.height * sc,
-                index + 2, false, 0.92);
+                index + 2, false, 0.92, `dash-${index}`);
         }
         return;
     }
@@ -355,7 +367,7 @@ function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
     cr.fill();
     for (let i = 0; i < DOCK_ICON_COUNT; i++) {
         drawAppGlyph(cr, dockSX + i * (dockIc + dockGap), dockSY,
-            dockIc, dockIc, i + 2, false, 0.92);
+            dockIc, dockIc, i + 2, false, 0.92, `dock-${i}`);
     }
 }
 
@@ -534,7 +546,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const updatePresetInfo = () => {
             const p = PRESETS[comboRow.selected];
             presetInfo.label =
-                `${p.iconSize}px icons · ${p.rows}×${p.columns} grid · ${p.gap}px gap · ${p.rows * p.columns} apps/page`;
+                `${p.iconSize}px icons · ${p.gap}px gap · adaptive balanced grid`;
         };
         connectSignal(cleanupFns, settings, 'changed::preset-level', () => {
             comboRow.selected = settings.get_int('preset-level');
@@ -755,21 +767,30 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const layout = estimateGridArea(mW, mH);
             if (runtimeLayout) {
                 const grid = runtimeLayout.grid;
-                layout.iconAreaX = grid.x + grid.paddingLeft;
-                layout.iconAreaYPos = grid.y + grid.paddingTop;
+                if (runtimeLayout.settled) {
+                    layout.iconAreaX = grid.x + grid.paddingLeft;
+                    layout.iconAreaYPos = grid.y + grid.paddingTop;
+                }
                 layout.iconAreaW = Math.max(100,
                     grid.width - grid.paddingLeft - grid.paddingRight);
                 layout.iconAreaH = Math.max(100,
                     grid.height - grid.paddingTop - grid.paddingBottom);
-                if (!runtimeLayout.dashRect) {
+                if (runtimeLayout.settled && !runtimeLayout.dashRect) {
                     layout.dashY = Math.min(mH - layout.dashH,
                         grid.y + grid.height + layout.spacing);
                 }
             }
+            const runtimeConfig = runtimeLayout?.config;
+            const measuredTileSize = runtimeConfig?.iconSize === iconSize
+                ? runtimeConfig.tileSize ?? null
+                : null;
+            const previewCellSize = computePreviewTileSize(
+                iconSize, measuredTileSize);
             const fit = computeGridFit({
                 width: layout.iconAreaW,
                 height: layout.iconAreaH,
                 iconSize,
+                tileSize: previewCellSize,
                 rowGap,
                 columnGap: colGap,
                 widthRatio: usePresets ? PRESET_WIDTH_RATIO : 1,
@@ -780,10 +801,6 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 cellSize,
             } = fit;
 
-            const runtimeConfig = runtimeLayout?.config;
-            const measuredTileSize = runtimeConfig?.iconSize === iconSize
-                ? runtimeConfig.tileSize ?? null
-                : null;
             const activeRows = usePresets ? fitRows : rows;
             const activeColumns = usePresets ? fitCols : columns;
             const runtimeConfigMatches = runtimeLayout?.version === 2 &&
@@ -815,8 +832,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
-                previewCellSize: computePreviewTileSize(
-                    iconSize, measuredTileSize),
+                previewCellSize,
                 itemCount,
                 gridItems,
                 measuredItems: measuredItemsMatch ? runtimeLayout.items : null,

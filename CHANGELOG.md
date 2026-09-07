@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1 — 2026-09-07
+
+- Calculated preset capacity and custom fit estimates from Shell's full preferred app-tile size so every configured row and column remains visible.
+- Increased balanced preset width from two thirds to 80% of the icon area, improving space use while retaining centered side margins and the existing icon spacing.
+- Kept fallback preview icons visible when Shell publishes an unsettled off-screen overview position.
+- Varied preview icon colors deterministically by application or folder ID instead of repeating the same palette by column.
+- Restored a numeric extension version for reliable GNOME Shell and Extensions website update comparisons.
+
 ## 1.3.0 — 2026-09-07
 
 - Enlarged the preferences preview to make better use of the right pane.
