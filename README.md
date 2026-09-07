@@ -25,11 +25,11 @@ Current version: **1.2.0**
 
 **Preferences — Preset Mode**
 
-![Preset Mode](images/preset.png)
+![Preset mode with a live App Grid preview](images/preset-mode-preview.png)
 
 **Preferences — Custom Mode**
 
-![Custom Mode](images/custom.png)
+![Custom mode with independent grid controls and a live preview](images/custom-mode-preview.png)
 
 ## Presets
 
