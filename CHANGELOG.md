@@ -7,6 +7,7 @@
 - Replayed measured Shell tile, icon, search, workspace, and Dash geometry in the preview.
 - Calibrated the fallback tile, workspace, and compact Dock proportions against a 2560×1440 overview capture.
 - Matched preview icon counts to Shell's real per-page items, including folders and preserved 24-item page boundaries.
+- Detected every preview folder from Shell folder IDs instead of assuming fixed grid positions.
 
 ## 1.2.0 — 2026-09-07
 

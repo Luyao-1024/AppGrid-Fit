@@ -13,7 +13,7 @@ import {
     computeGridFit,
     computeGridPixelSize,
     decodePreviewLayout,
-    splitPageItemCounts,
+    splitPageItems,
 } from './config.js';
 
 const SHELL_PANEL_H = 30;
@@ -248,7 +248,7 @@ function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
 function drawGridSection(cr, iaX, iaY, iaW, iaH,
     drawRows, drawCols, fitRows, fitCols,
     cellW, cellH, iconW, iconH, gapW, gapH,
-    sc, usePresets, itemCount) {
+    sc, usePresets, itemCount, items) {
     const gridW = drawCols * cellW + Math.max(0, drawCols - 1) * gapW;
     const gx = iaX + (iaW - gridW) / 2;
     const gy = iaY;
@@ -265,7 +265,7 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
             const iconX = gx + col * (cellW + gapW) + (cellW - iconW) / 2;
             const iconY = gy + row * (cellH + gapH) + (cellH - iconH) / 2;
             if (occupied) {
-                const folder = index < 2;
+                const folder = items?.[index]?.folder ?? false;
                 const glyphX = folder ? gx + col * (cellW + gapW) : iconX;
                 const glyphY = folder ? gy + row * (cellH + gapH) : iconY;
                 const glyphW = folder ? cellW : iconW;
@@ -393,20 +393,36 @@ function readGridConfig(settings) {
     };
 }
 
-function readFallbackPageCounts(shellSettings) {
+function readFallbackPages(shellSettings, folderSettings) {
     try {
         const pages = shellSettings.get_value('app-picker-layout').deepUnpack();
-        const counts = pages.map(page => page instanceof Map
-            ? page.size
-            : Object.keys(page ?? {}).length);
-        return splitPageItemCounts(counts);
+        const folderIds = new Set(folderSettings.get_strv('folder-children'));
+        const pageItems = pages.map(page => {
+            const entries = page instanceof Map
+                ? [...page.entries()]
+                : Object.entries(page ?? {});
+            return entries.map(([id, value], order) => {
+                const details = value?.deepUnpack?.() ?? value;
+                const rawPosition = details instanceof Map
+                    ? details.get('position')
+                    : details?.position;
+                const position = rawPosition?.deepUnpack?.() ??
+                    rawPosition ?? order;
+                return {id, position, folder: folderIds.has(id)};
+            }).sort((a, b) => a.position - b.position);
+        });
+        return splitPageItems(pageItems);
     } catch (_e) {
         try {
-            const appCount = Gio.AppInfo.get_all()
-                .filter(app => app.should_show()).length;
-            return splitPageItemCounts([appCount]);
+            const apps = Gio.AppInfo.get_all()
+                .filter(app => app.should_show())
+                .map((app, position) => ({
+                    id: app.get_id(), position, folder: false,
+                }));
+            return splitPageItems([apps]);
         } catch (_error) {
-            return [DEFAULT_PAGE_CAPACITY];
+            return [Array.from({length: DEFAULT_PAGE_CAPACITY},
+                (_value, position) => ({position, folder: false}))];
         }
     }
 }
@@ -665,6 +681,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const ps = {monitorW: 1920, monitorH: 1080};
         const shellSettings = Gio.Settings.new('org.gnome.shell');
+        const folderSettings = Gio.Settings.new('org.gnome.desktop.app-folders');
 
         const refreshMonitorSize = () => {
             try {
@@ -772,18 +789,23 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 runtimeConfig?.columns === activeColumns &&
                 runtimeConfig?.rowGap === rowGap &&
                 runtimeConfig?.columnGap === colGap;
-            const fallbackPageCounts = readFallbackPageCounts(shellSettings);
+            const fallbackPages = readFallbackPages(shellSettings, folderSettings);
+            const fallbackPageCounts = fallbackPages.map(page => page.length);
             const pageItemCounts = runtimeLayout?.pageItemCounts ??
                 fallbackPageCounts;
             const currentPage = Math.min(
                 runtimeLayout?.currentPage ?? 0, pageItemCounts.length - 1);
             const itemCount = pageItemCounts[currentPage] ??
                 runtimeLayout?.itemCount ?? 0;
+            const gridItems = runtimeLayout?.items?.length === itemCount
+                ? runtimeLayout.items
+                : fallbackPages[currentPage] ?? [];
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
                 previewCellSize: Math.max(cellSize, SHELL_MIN_PREVIEW_TILE_SIZE),
                 itemCount,
+                gridItems,
                 measuredItems: measuredItemsMatch ? runtimeLayout.items : null,
                 searchRect: runtimeLayout?.settled
                     ? runtimeLayout.searchRect ?? null : null,
@@ -840,6 +862,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             `changed::${PREVIEW_LAYOUT_KEY}`, updatePreview);
         connectSignal(cleanupFns, shellSettings,
             'changed::app-picker-layout', updatePreview);
+        connectSignal(cleanupFns, folderSettings,
+            'changed::folder-children', updatePreview);
         const monitors = display?.get_monitors();
         if (monitors)
             connectSignal(cleanupFns, monitors, 'items-changed', updatePreview);
@@ -853,6 +877,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 iconAreaX, iconAreaYPos, iconAreaW, iconAreaH,
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize, previewCellSize, itemCount,
+                gridItems,
                 measuredItems, searchRect, workspaceRects, workspaceCount,
                 dashRect, dashItems, pageCount, currentPage,
             } = ps;
@@ -900,7 +925,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     previewCellSize * sc, previewCellSize * sc,
                     iconSize * sc, iconSize * sc,
                     colGap * sc, rowGap * sc,
-                    sc, usePresets, itemCount);
+                    sc, usePresets, itemCount, gridItems);
             }
 
             drawDashSection(cr, fx, fy, fW,

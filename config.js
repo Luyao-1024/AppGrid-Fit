@@ -65,6 +65,19 @@ export function splitPageItemCounts(pageItemCounts,
     return result.length ? result : [0]
 }
 
+export function splitPageItems(pages, capacity = DEFAULT_PAGE_CAPACITY) {
+    if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page)) ||
+        !Number.isInteger(capacity) || capacity < 1)
+        return []
+
+    const result = []
+    for (const page of pages) {
+        for (let start = 0; start < page.length; start += capacity)
+            result.push(page.slice(start, start + capacity))
+    }
+    return result.length ? result : [[]]
+}
+
 export function decodePreviewLayout(value) {
     try {
         const layout = JSON.parse(value)

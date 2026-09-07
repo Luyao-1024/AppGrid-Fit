@@ -77,7 +77,7 @@ Switch between presets or disable **Use preset sizes** for granular control. Cus
 
 **Consolidate app pages** is disabled by default. Enabling it fills earlier pages and permanently saves the resulting application order.
 
-The preferences window uses a horizontal layout with controls on the left and a large monitor preview on the right. While the extension is active, the preview uses measured App Grid tiles, icons, per-page item counts, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout so folders and page boundaries still produce the correct visible icon count. Open the overview once after changing the layout to publish settled positions. Its default size is 1200×560.
+The preferences window uses a horizontal layout with controls on the left and a large monitor preview on the right. While the extension is active, the preview uses measured App Grid tiles, icons, per-page item counts, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. Its default size is 1200×560.
 
 ## Requirements
 

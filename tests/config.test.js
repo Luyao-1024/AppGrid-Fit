@@ -10,6 +10,7 @@ import {
     computeGridPixelSize,
     decodePreviewLayout,
     splitPageItemCounts,
+    splitPageItems,
 } from '../config.js'
 
 test('preset values remain stable', () => {
@@ -62,6 +63,18 @@ test('fallback page counts preserve Shell page boundaries and overflow', () => {
     assert.deepEqual(splitPageItemCounts([38]), [24, 14])
     assert.deepEqual(splitPageItemCounts([18, 30]), [18, 24, 6])
     assert.deepEqual(splitPageItemCounts([]), [0])
+})
+
+test('fallback page items preserve automatic folder identities', () => {
+    const pages = [[
+        {id: 'first.desktop', folder: false},
+        {id: 'Utilities', folder: true},
+        {id: 'System', folder: true},
+    ]]
+    assert.deepEqual(splitPageItems(pages, 2), [
+        pages[0].slice(0, 2),
+        pages[0].slice(2),
+    ])
 })
 
 test('all settings keys are unique', () => {

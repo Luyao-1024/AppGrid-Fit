@@ -301,6 +301,9 @@ Before a settled snapshot exists, the preview falls back to `estimateGridArea()`
 117 px minimum tile size to account for labels widening Shell tiles. Its fallback item count
 comes from `org.gnome.shell`'s `app-picker-layout`, where folders are already single top-level
 items; oversized stored pages are split at the default 24-item boundary.
+Folder styling is never inferred from an item's position. The fallback joins each
+`app-picker-layout` item ID with `org.gnome.desktop.app-folders`'s `folder-children`; the live
+snapshot identifies folder actors directly. Both settings sources trigger preview redraws.
 
 In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`). In
 custom mode, it draws the user's configured `rows×columns` with overflow cells in red. Empty
