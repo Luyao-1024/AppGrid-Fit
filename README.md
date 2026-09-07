@@ -2,7 +2,7 @@
 
 A GNOME Shell extension (46–50) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
-Current version: **1.2.0**
+Current version: **1.3.0**
 
 ## Features
 

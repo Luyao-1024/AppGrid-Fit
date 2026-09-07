@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 2026-09-07
 
 - Enlarged the preferences preview to make better use of the right pane.
 - Matched preview placement, capacity, icon scale, and occupied cells to the live Shell grid allocation.
