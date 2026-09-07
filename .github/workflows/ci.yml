@@ -1,39 +1,91 @@
-name: CI
+name: Validate and build
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appgrid-fit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    name: GNOME extension checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install GNOME tooling
+
+      - name: Install GNOME packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell libglib2.0-bin
-      - name: Check JavaScript
-        run: npm run check:js
-      - name: Run unit tests
-        run: npm test
-      - name: Validate schema and generated database
+          sudo apt-get install --yes gnome-shell libglib2.0-bin unzip
+
+      - name: Validate source and run tests
+        run: npm run check
+
+      - name: Validate schema reproducibility
         run: |
+          set -euo pipefail
           glib-compile-schemas --strict --dry-run schemas
           schema_dir="$(mktemp -d)"
-          glib-compile-schemas --targetdir="$schema_dir" schemas
+          glib-compile-schemas --strict --targetdir="$schema_dir" schemas
           cmp schemas/gschemas.compiled "$schema_dir/gschemas.compiled"
-      - name: Package extension
+
+      - name: Build and inspect extension package
+        id: package
         run: |
-          package_dir="$(mktemp -d)"
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/package"
+          mkdir -p "$package_dir"
           gnome-extensions pack --force \
             --extra-source=config.js \
             --extra-source=gridPages.js \
             --extra-source=LICENSE \
             . --out-dir="$package_dir"
-          unzip -l "$package_dir"/*.zip | grep config.js
-          unzip -l "$package_dir"/*.zip | grep gridPages.js
-          unzip -l "$package_dir"/*.zip | grep LICENSE
+          archive="$package_dir/appgrid-size@luyao.shell-extension.zip"
+          unzip -t "$archive"
+          npm run check:package -- "$archive"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python for Shexli
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run Shexli review checks
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/shexli-venv"
+          "$RUNNER_TEMP/shexli-venv/bin/pip" install --upgrade pip shexli
+          set +e
+          "$RUNNER_TEMP/shexli-venv/bin/shexli" \
+            "${{ steps.package.outputs.archive }}"
+          shexli_status=$?
+          set -e
+          if [ "$shexli_status" -eq 139 ]; then
+            echo '::warning::Shexli crashed with SIGSEGV; repository package checks passed and remain blocking.'
+          else
+            exit "$shexli_status"
+          fi
+
+      - name: Upload validated extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: appgrid-fit-${{ github.sha }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 14

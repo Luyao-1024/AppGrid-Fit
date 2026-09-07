@@ -386,7 +386,8 @@ gnome-extensions enable appgrid-size@luyao
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
 | `tests/*.test.js` | Node unit tests for shared calculations and page reflow |
-| `.github/workflows/ci.yml` | JavaScript, schema, test, and package validation |
+| `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
+| `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
 | `LICENSE` | MIT license text |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |

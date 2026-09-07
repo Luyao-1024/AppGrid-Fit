@@ -94,7 +94,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release details.
 ## Development checks
 
 ```bash
-npm run check:js
-npm test
+npm run check
 glib-compile-schemas --strict --dry-run schemas/
 ```
+
+CI additionally builds the final ZIP, verifies its GNOME metadata, schema declaration,
+local imports, review-sensitive APIs, archive paths and contents, runs Shexli, and uploads
+the validated package as a workflow artifact.

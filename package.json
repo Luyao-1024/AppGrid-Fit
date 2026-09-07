@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "check:js": "node --check config.js && node --check gridPages.js && node --check extension.js && node --check prefs.js",
+    "check:extension": "node scripts/validate-extension.mjs --source .",
+    "check:package": "node scripts/validate-extension.mjs --source . --archive",
+    "check": "npm run check:js && npm run check:extension && npm test",
     "test": "node --test"
   }
 }

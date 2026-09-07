@@ -6,6 +6,7 @@
 - Increased balanced preset width from two thirds to 80% of the icon area, improving space use while retaining centered side margins and the existing icon spacing.
 - Kept fallback preview icons visible when Shell publishes an unsettled off-screen overview position.
 - Varied preview icon colors deterministically by application or folder ID instead of repeating the same palette by column.
+- Added blocking CI checks for GNOME metadata, ESM imports, review-sensitive APIs, reproducible schemas, package contents, and Shexli findings, with validated ZIP artifacts uploaded from each run.
 - Restored a numeric extension version for reliable GNOME Shell and Extensions website update comparisons.
 
 ## 1.3.0 — 2026-09-07
