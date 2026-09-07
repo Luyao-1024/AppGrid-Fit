@@ -144,6 +144,12 @@ because `_savePages()` permanently changes the user's application order.
 `reflowPages()` always detects pages above the configured capacity and calls `_updatePages()`
 to move surplus items forward before allocation. This prevents overflow when capacity shrinks.
 
+On first apply for a layout manager, `restorePersistedPageOrder()` temporarily gives each page
+enough capacity for all visible items and calls `AppDisplay._redisplay()`. Shell initially loads
+saved layouts with its default 24-item capacity, which can reverse the overflow tail by inserting
+each extra item at the start of the next page. Restoring from `PageManager` before reflow keeps
+drag-and-drop order stable across login when the extension uses a larger capacity.
+
 ### Overview re-apply
 
 Connected to `Main.overview` `'showing'` signal so layout is re-applied each time the
@@ -194,6 +200,7 @@ enable()
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
+  │   ├─ restorePersistedPageOrder(...)   — first-run: rebuild order saved before Shell's 24-item split
   │   ├─ reflowPages(lm, {consolidate})  — move overflow; optionally fill vacancies
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
   ├─ Main.overview.connect('showing')
@@ -382,7 +389,7 @@ gnome-extensions enable appgrid-size@luyao
 | File | Purpose |
 |------|---------|
 | `config.js` | Shared presets, setting keys, fit and pixel-size calculations |
-| `gridPages.js` | Testable page overflow and optional consolidation adapter |
+| `gridPages.js` | Testable saved-order restoration, page overflow, and optional consolidation adapter |
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
 | `tests/*.test.js` | Node unit tests for shared calculations and page reflow |

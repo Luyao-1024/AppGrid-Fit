@@ -26,6 +26,32 @@ export function consolidatePages(layoutManager) {
     return modified
 }
 
+export function restorePersistedPageOrder(appDisplay, layoutManager) {
+    if (typeof appDisplay?._redisplay !== 'function' ||
+        !Array.isArray(layoutManager?._pages))
+        return false
+
+    const itemCount = layoutManager._pages.reduce((count, page) =>
+        count + (page.visibleChildren?.length ?? 0), 0)
+    if (itemCount === 0)
+        return false
+
+    const rows = layoutManager.rows_per_page
+    const columns = layoutManager.columns_per_page
+
+    // Shell initially loads saved positions with its default 24-item capacity.
+    // Let every saved page fit while _redisplay() restores its original order.
+    layoutManager.columns_per_page = itemCount
+    layoutManager.rows_per_page = 1
+    try {
+        appDisplay._redisplay()
+    } finally {
+        layoutManager.rows_per_page = rows
+        layoutManager.columns_per_page = columns
+    }
+    return true
+}
+
 export function reflowPages(layoutManager, {consolidate = false, warn} = {}) {
     if (!Array.isArray(layoutManager._pages))
         return false

@@ -12,7 +12,7 @@ import {
     computeGridFit,
     computePreviewTileSize,
 } from './config.js'
-import {reflowPages} from './gridPages.js'
+import {reflowPages, restorePersistedPageOrder} from './gridPages.js'
 
 const ENFORCED_PROPERTIES = [
     'row-spacing', 'column-spacing',
@@ -60,6 +60,7 @@ export default class AppGridSizeExtension extends Extension {
         this._allocationId = 0
         this._allocationGrid = null
         this._enforcerLayoutManager = null
+        this._restoredOrderLayoutManager = null
         this._lastAllocation = null
         this._scheduledApplyId = 0
     }
@@ -509,6 +510,10 @@ export default class AppGridSizeExtension extends Extension {
             this._activeConfig = {...config, consolidate}
             this._applyLayout(grid, lm, config)
             this._setupEnforcers(lm)
+
+            if (this._restoredOrderLayoutManager !== lm &&
+                restorePersistedPageOrder(this._getAppDisplay(), lm))
+                this._restoredOrderLayoutManager = lm
 
             const pagesChanged = reflowPages(lm, {
                 consolidate,

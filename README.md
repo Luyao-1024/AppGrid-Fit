@@ -10,6 +10,7 @@ Current version: **1.3.1**
 - **Balanced fit**: Presets calculate rows/columns from your screen and Shell's full app-tile size while using 80% of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
+- **Persistent app order**: Keeps drag-and-drop positions stable across login even when a page contains more than Shell's default 24 apps
 - **Responsive layout**: Recalculates preset capacity when the overview allocation or monitor configuration changes
 - **Live settings**: Preference changes apply immediately after the extension has been loaded
 

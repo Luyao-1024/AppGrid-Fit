@@ -2,6 +2,7 @@
 
 ## 1.3.1 — 2026-09-07
 
+- Preserved drag-and-drop app order across login when a configured page holds more than Shell's default 24 items.
 - Calculated preset capacity and custom fit estimates from Shell's full preferred app-tile size so every configured row and column remains visible.
 - Increased balanced preset width from two thirds to 80% of the icon area, improving space use while retaining centered side margins and the existing icon spacing.
 - Kept fallback preview icons visible when Shell publishes an unsettled off-screen overview position.
