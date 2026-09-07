@@ -58,6 +58,7 @@ calculations used by both runtime and preferences code.
 | `PRESET_WIDTH_RATIO` | `2/3` | Portion of available width used for balanced-fit columns |
 | `UNCONSTRAINED_SPACING` | `-1` | max_row/column_spacing value to disable limit |
 | `DEFAULT_PAGE_CAPACITY` | `24` | Shell's default 4×6 boundary used to split fallback page counts |
+| `PREVIEW_TILE_OVERHEAD` | `53` | Empirical Shell tile overhead beyond the selected icon size |
 
 ### Shell layout estimation constants (prefs.js only)
 
@@ -82,7 +83,6 @@ Used by `estimateGridArea()` to approximate the GNOME Shell overview layout:
 |---|---|---|
 | `PREVIEW_PADDING` | `0` | Monitor content fills the preview frame edge to edge |
 | `DOCK_ICON_COUNT` | `9` | Fallback number of dock icons drawn in preview |
-| `SHELL_MIN_PREVIEW_TILE_SIZE` | `117` | Fallback tile size calibrated for labels widening Shell tiles |
 | `SHELL_PREVIEW_GRID_TOP_INSET` | `8` | Fallback inset matching the first visible tile row |
 
 ### Iterated arrays
@@ -298,7 +298,8 @@ rectangles for every visible app tile and icon, the search entry, workspace thum
 Dash items. Settled actor geometry is captured while the overview is visible, so opening the
 overview once after changing the layout gives the preferences preview exact Shell positions.
 Before a settled snapshot exists, the preview falls back to `estimateGridArea()` and uses a
-117 px minimum tile size to account for labels widening Shell tiles. Its fallback item count
+an icon-size-dependent tile (`iconSize + 53`) to account for labels and Shell chrome. Its
+fallback item count
 comes from `org.gnome.shell`'s `app-picker-layout`, where folders are already single top-level
 items; oversized stored pages are split at the default 24-item boundary.
 Folder styling is never inferred from an item's position. The fallback joins each

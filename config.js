@@ -4,6 +4,7 @@ export const MIN_GRID_DIMENSION = 2
 export const PRESET_WIDTH_RATIO = 2 / 3
 export const PREVIEW_LAYOUT_KEY = 'runtime-preview-layout'
 export const DEFAULT_PAGE_CAPACITY = 24
+export const PREVIEW_TILE_OVERHEAD = 53
 
 export const SETTINGS_KEYS = [
     'use-presets', 'preset-level', 'consolidate-pages',
@@ -43,6 +44,10 @@ export function computeGridPixelSize(rows, columns, cellSize, rowGap, columnGap)
         width: columns * cellSize + Math.max(0, columns - 1) * columnGap,
         height: rows * cellSize + Math.max(0, rows - 1) * rowGap,
     }
+}
+
+export function computePreviewTileSize(iconSize) {
+    return Math.max(0, iconSize) + PREVIEW_TILE_OVERHEAD
 }
 
 export function splitPageItemCounts(pageItemCounts,

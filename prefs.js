@@ -12,6 +12,7 @@ import {
     SETTINGS_KEYS,
     computeGridFit,
     computeGridPixelSize,
+    computePreviewTileSize,
     decodePreviewLayout,
     splitPageItems,
 } from './config.js';
@@ -29,7 +30,6 @@ const SHELL_PAGE_PAD = 24;
 
 const PREVIEW_PADDING = 0;
 const DOCK_ICON_COUNT = 9;
-const SHELL_MIN_PREVIEW_TILE_SIZE = 117;
 const SHELL_PREVIEW_GRID_TOP_INSET = 8;
 
 const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
@@ -803,7 +803,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
-                previewCellSize: Math.max(cellSize, SHELL_MIN_PREVIEW_TILE_SIZE),
+                previewCellSize: computePreviewTileSize(iconSize),
                 itemCount,
                 gridItems,
                 measuredItems: measuredItemsMatch ? runtimeLayout.items : null,
@@ -833,7 +833,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             if (usePresets) {
                 fitLabel.label =
-                    `Balanced fit: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps/page`;
+                    `Balanced fit: ${fitRows}×${fitCols} = ` +
+                    `${fitRows * fitCols} capacity  ·  ` +
+                    `${itemCount} apps on current page`;
             } else {
                 const gridSize = computeGridPixelSize(
                     rows, columns, cellSize, rowGap, colGap);

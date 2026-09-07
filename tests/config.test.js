@@ -8,6 +8,7 @@ import {
     SETTINGS_KEYS,
     computeGridFit,
     computeGridPixelSize,
+    computePreviewTileSize,
     decodePreviewLayout,
     splitPageItemCounts,
     splitPageItems,
@@ -56,6 +57,12 @@ test('pixel size includes cells and only inter-cell gaps', () => {
         width: 840,
         height: 552,
     })
+})
+
+test('preview tile size scales with the selected icon size', () => {
+    assert.equal(computePreviewTileSize(32), 85)
+    assert.equal(computePreviewTileSize(64), 117)
+    assert.equal(computePreviewTileSize(96), 149)
 })
 
 test('fallback page counts preserve Shell page boundaries and overflow', () => {
