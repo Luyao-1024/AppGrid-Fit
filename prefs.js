@@ -5,6 +5,7 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
+    DEFAULT_PAGE_CAPACITY,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
@@ -12,6 +13,7 @@ import {
     computeGridFit,
     computeGridPixelSize,
     decodePreviewLayout,
+    splitPageItemCounts,
 } from './config.js';
 
 const SHELL_PANEL_H = 30;
@@ -25,8 +27,10 @@ const SHELL_MIN_IND_W = 60;
 const SHELL_IND_PADDING = 18;
 const SHELL_PAGE_PAD = 24;
 
-const PREVIEW_PADDING = 8;
-const DOCK_ICON_COUNT = 5;
+const PREVIEW_PADDING = 0;
+const DOCK_ICON_COUNT = 9;
+const SHELL_MIN_PREVIEW_TILE_SIZE = 117;
+const SHELL_PREVIEW_GRID_TOP_INSET = 8;
 
 const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
 
@@ -92,20 +96,18 @@ function roundedRect(cr, x, y, w, h, r) {
 
 function drawPanelSection(cr, fx, fy, fW, panelH, sc) {
     const panelHs = panelH * sc;
-    cr.setDash([3, 2], 0);
-    cr.setLineWidth(1);
     cr.rectangle(fx, fy, fW, panelHs);
-    cr.setSourceRGBA(0, 0, 0, 0.4);
-    cr.fillPreserve();
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
-    cr.stroke();
+    cr.setSourceRGBA(0.03, 0.04, 0.07, 0.58);
+    cr.fill();
 
-    cr.setSourceRGBA(0.5, 0.6, 0.7, 0.4);
+    cr.setSourceRGBA(0.86, 0.89, 0.94, 0.7);
     const actH = Math.max(2, 10 * sc);
     roundedRect(cr, fx + 10 * sc, fy + (panelHs - actH) / 2,
-        Math.max(4, 70 * sc), actH, Math.max(1, 3 * sc));
+        Math.max(4, 42 * sc), actH, Math.max(1, 5 * sc));
     cr.fill();
-    cr.arc(fx + fW / 2, fy + panelHs / 2, Math.max(2, 4 * sc), 0, Math.PI * 2);
+    roundedRect(cr, fx + fW / 2 - 24 * sc,
+        fy + (panelHs - actH * 0.7) / 2,
+        48 * sc, actH * 0.7, Math.max(1, 3 * sc));
     cr.fill();
     const sysW = Math.max(4, 50 * sc);
     roundedRect(cr, fx + fW - sysW - 10 * sc, fy + (panelHs - actH) / 2,
@@ -113,39 +115,132 @@ function drawPanelSection(cr, fx, fy, fW, panelH, sc) {
     cr.fill();
 }
 
-function drawSearchSection(cr, fx, fW, sY, sH, sc) {
-    cr.setDash([3, 2], 0);
-    cr.setLineWidth(1);
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
-    cr.rectangle(fx, sY, fW, sH);
+function drawSearchSection(cr, fx, fy, fW, sY, sH, sc, searchRect) {
+    const pillH = searchRect?.height * sc ?? Math.max(4, 40 * sc);
+    const pillW = searchRect?.width * sc ?? Math.min(370 * sc, fW * 0.35);
+    const pillX = searchRect
+        ? fx + searchRect.x * sc
+        : fx + (fW - pillW) / 2;
+    const pillY = searchRect
+        ? fy + searchRect.y * sc
+        : sY + Math.max(0, Math.min(sH - pillH, 12 * sc));
+    cr.setSourceRGBA(0.43, 0.49, 0.62, 0.56);
+    roundedRect(cr, pillX, pillY, pillW, pillH, pillH / 2);
+    cr.fill();
+    cr.setSourceRGBA(0.9, 0.92, 0.96, 0.55);
+    cr.arc(pillX + 17 * sc, pillY + pillH / 2,
+        Math.max(1, 5 * sc), 0, Math.PI * 2);
+    cr.setLineWidth(Math.max(0.7, sc));
     cr.stroke();
-    const pillH = Math.max(4, 30 * sc);
-    const pillW = Math.min(360 * sc, fW * 0.35);
-    cr.setSourceRGBA(0.5, 0.5, 0.55, 0.3);
-    roundedRect(cr, fx + (fW - pillW) / 2, sY + (sH - pillH) / 2,
-        pillW, pillH, pillH / 2);
+}
+
+function drawWorkspaceThumbnail(cr, x, y, width, height, radius, index) {
+    cr.setSourceRGBA(0.08, 0.10, 0.16, 0.16);
+    roundedRect(cr, x, y, width, height, radius);
+    cr.fillPreserve();
+    cr.setSourceRGBA(0.82, 0.86, 0.94, 0.2);
+    cr.setLineWidth(1);
+    cr.stroke();
+    if (index === 0) {
+        cr.setSourceRGBA(0.03, 0.035, 0.045, 0.72);
+        roundedRect(cr,
+            x + width * 0.05, y + height * 0.05,
+            width * 0.9, height * 0.88, radius * 0.7);
+        cr.fill();
+    }
+}
+
+function drawMiniWsSection(cr, fx, fy, fW, mwY, mwH, sc,
+    workspaceRects, workspaceCount, monitorAspect) {
+    if (workspaceRects?.length) {
+        for (const [index, rect] of workspaceRects.entries()) {
+            drawWorkspaceThumbnail(cr,
+                fx + rect.x * sc, fy + rect.y * sc,
+                rect.width * sc, rect.height * sc,
+                Math.max(1, 4 * sc), index);
+        }
+        return;
+    }
+
+    const wsThumbH = mwH;
+    const wsThumbW = wsThumbH * monitorAspect;
+    const wsGap = Math.max(2, 36 * sc);
+    const wsCount = Math.max(1, Math.min(4, workspaceCount));
+    const wsTotalW = wsCount * wsThumbW + (wsCount - 1) * wsGap;
+    const wsStartX = fx + (fW - wsTotalW) / 2;
+    const wsStartY = mwY + 8 * sc;
+    for (let i = 0; i < wsCount; i++) {
+        drawWorkspaceThumbnail(cr,
+            wsStartX + i * (wsThumbW + wsGap), wsStartY,
+            wsThumbW, wsThumbH, Math.max(1, 4 * sc), i);
+    }
+}
+
+const ICON_COLORS = [
+    [0.20, 0.52, 0.92], [0.24, 0.72, 0.42], [0.86, 0.32, 0.34],
+    [0.62, 0.38, 0.88], [0.95, 0.59, 0.18], [0.16, 0.68, 0.75],
+];
+
+function drawAppGlyph(cr, x, y, width, height, index, folder, alpha = 0.9) {
+    const [r, g, b] = ICON_COLORS[index % ICON_COLORS.length];
+    if (folder) {
+        cr.setSourceRGBA(0.42, 0.49, 0.64, alpha * 0.72);
+        roundedRect(cr, x, y, width, height, Math.max(1, width * 0.16));
+        cr.fill();
+        const mini = Math.min(width, height) * 0.25;
+        const gap = mini * 0.24;
+        const sx = x + (width - mini * 2 - gap) / 2;
+        const sy = y + (height - mini * 2 - gap) / 2;
+        for (let row = 0; row < 2; row++) {
+            for (let col = 0; col < 2; col++) {
+                const color = ICON_COLORS[(index + row * 2 + col) % ICON_COLORS.length];
+                cr.setSourceRGBA(...color, alpha);
+                roundedRect(cr, sx + col * (mini + gap), sy + row * (mini + gap),
+                    mini, mini, Math.max(1, mini * 0.15));
+                cr.fill();
+            }
+        }
+        return;
+    }
+
+    cr.setSourceRGBA(r, g, b, alpha);
+    if (index % 3 === 1) {
+        cr.arc(x + width / 2, y + height / 2,
+            Math.min(width, height) / 2, 0, Math.PI * 2);
+    } else {
+        roundedRect(cr, x, y, width, height,
+            Math.max(1, Math.min(width, height) * (index % 3 === 0 ? 0.2 : 0.42)));
+    }
     cr.fill();
 }
 
-function drawMiniWsSection(cr, fx, fW, mwY, mwH, sc) {
-    cr.setDash([3, 2], 0);
-    cr.setLineWidth(1);
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.4);
-    cr.rectangle(fx, mwY, fW, mwH);
-    cr.stroke();
+function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
+    for (const [index, item] of items.entries()) {
+        const tile = item.tile;
+        const fallbackIconW = Math.min(iconSize, tile.width) * sc;
+        const fallbackIconH = Math.min(iconSize, tile.height) * sc;
+        const ix = item.folder
+            ? fx + tile.x * sc
+            : item.icon
+            ? fx + item.icon.x * sc
+            : fx + (tile.x + (tile.width - iconSize) / 2) * sc;
+        const iy = item.folder
+            ? fy + tile.y * sc
+            : item.icon
+            ? fy + item.icon.y * sc
+            : fy + (tile.y + Math.max(0, (tile.height - iconSize - 18) / 2)) * sc;
+        const iw = item.folder
+            ? tile.width * sc : item.icon?.width * sc || fallbackIconW;
+        const ih = item.folder
+            ? tile.height * sc : item.icon?.height * sc || fallbackIconH;
+        drawAppGlyph(cr, ix, iy, iw, ih, index, item.folder);
 
-    const wsThumbW = Math.max(8, 120 * sc);
-    const wsThumbH = mwH * 0.6;
-    const wsGap = Math.max(2, 10 * sc);
-    const wsCount = Math.max(2, Math.min(4,
-        Math.floor((fW - 40 * sc) / (wsThumbW + wsGap))));
-    const wsTotalW = wsCount * wsThumbW + (wsCount - 1) * wsGap;
-    const wsStartX = fx + (fW - wsTotalW) / 2;
-    const wsStartY = mwY + (mwH - wsThumbH) / 2;
-    cr.setSourceRGBA(0.5, 0.5, 0.55, 0.25);
-    for (let i = 0; i < wsCount; i++) {
-        roundedRect(cr, wsStartX + i * (wsThumbW + wsGap), wsStartY,
-            wsThumbW, wsThumbH, Math.max(1, 3 * sc));
+        const labelW = Math.min(tile.width * 0.72, Math.max(20, iconSize * 0.9)) * sc;
+        const labelH = Math.max(1, 3 * sc);
+        const labelX = fx + (tile.x + (tile.width - labelW / sc) / 2) * sc;
+        const labelY = fy + (tile.y + tile.height - 17) * sc;
+        cr.setSourceRGBA(0.9, 0.92, 0.96, 0.62);
+        roundedRect(cr, labelX, labelY, labelW, labelH, labelH / 2);
         cr.fill();
     }
 }
@@ -167,16 +262,29 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
             const index = row * drawCols + col;
             const occupied = itemCount === null || index < itemCount;
             const overflow = !usePresets && (row >= fitRows || col >= fitCols);
-            cr.setSourceRGBA(
-                overflow ? 0.85 : 0.35,
-                overflow ? 0.30 : 0.55,
-                overflow ? 0.30 : 0.85,
-                occupied ? (overflow ? 0.45 : 0.65) : 0.12);
-            roundedRect(cr,
-                gx + col * (cellW + gapW) + (cellW - iconW) / 2,
-                gy + row * (cellH + gapH) + (cellH - iconH) / 2,
-                iconW, iconH, Math.max(1, 3 * sc));
-            cr.fill();
+            const iconX = gx + col * (cellW + gapW) + (cellW - iconW) / 2;
+            const iconY = gy + row * (cellH + gapH) + (cellH - iconH) / 2;
+            if (occupied) {
+                const folder = index < 2;
+                const glyphX = folder ? gx + col * (cellW + gapW) : iconX;
+                const glyphY = folder ? gy + row * (cellH + gapH) : iconY;
+                const glyphW = folder ? cellW : iconW;
+                const glyphH = folder ? cellH : iconH;
+                drawAppGlyph(cr, glyphX, glyphY, glyphW, glyphH,
+                    index, folder, overflow ? 0.48 : 0.86);
+                cr.setSourceRGBA(0.9, 0.92, 0.96, overflow ? 0.3 : 0.52);
+                const labelW = iconW * 0.78;
+                const labelH = Math.max(1, 3 * sc);
+                roundedRect(cr, iconX + (iconW - labelW) / 2,
+                    folder ? glyphY + glyphH - 17 * sc : iconY + iconH + 7 * sc,
+                    labelW, labelH, labelH / 2);
+                cr.fill();
+            } else {
+                cr.setSourceRGBA(0.7, 0.75, 0.84, 0.08);
+                cr.arc(iconX + iconW / 2, iconY + iconH / 2,
+                    Math.max(1, 2 * sc), 0, Math.PI * 2);
+                cr.fill();
+            }
         }
     }
 
@@ -195,25 +303,59 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
     cr.restore();
 }
 
-function drawDashSection(cr, fx, fW, dY, dH, sc) {
-    cr.setDash([3, 2], 0);
-    cr.setLineWidth(1);
-    cr.rectangle(fx, dY, fW, dH);
-    cr.setSourceRGBA(0, 0, 0, 0.35);
-    cr.fillPreserve();
-    cr.setSourceRGBA(0.6, 0.75, 0.9, 0.5);
-    cr.stroke();
+function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
+    dashRect, dashItems, pageCount, currentPage) {
+    const indicatorY = (dashRect ? fy + dashRect.y * sc : dY) - 50 * sc;
+    const visiblePageCount = Math.max(1, Math.min(8, pageCount));
+    const indicatorGap = 32 * sc;
+    const indicatorStartX = fx + fW / 2 -
+        (visiblePageCount - 1) * indicatorGap / 2;
+    for (let index = 0; index < visiblePageCount; index++) {
+        const active = index === currentPage;
+        cr.setSourceRGBA(0.9, 0.92, 0.97, active ? 0.95 : 0.48);
+        cr.arc(indicatorStartX + index * indicatorGap, indicatorY,
+            Math.max(active ? 1 : 0.8, (active ? 4 : 3) * sc),
+            0, Math.PI * 2);
+        cr.fill();
+    }
 
-    const dockIc = Math.max(4, 46 * sc);
+    if (dashItems?.length) {
+        const bounds = dashRect ?? dashItems.reduce((acc, rect) => ({
+            x: Math.min(acc.x, rect.x),
+            y: Math.min(acc.y, rect.y),
+            width: Math.max(acc.x + acc.width, rect.x + rect.width) -
+                Math.min(acc.x, rect.x),
+            height: Math.max(acc.y + acc.height, rect.y + rect.height) -
+                Math.min(acc.y, rect.y),
+        }));
+        const bx = fx + bounds.x * sc;
+        const by = fy + bounds.y * sc;
+        const bw = bounds.width * sc;
+        const bh = bounds.height * sc;
+        cr.setSourceRGBA(0.12, 0.12, 0.16, 0.25);
+        roundedRect(cr, bx, by, bw, bh, Math.max(2, 14 * sc));
+        cr.fill();
+        for (const [index, rect] of dashItems.entries()) {
+            drawAppGlyph(cr,
+                fx + rect.x * sc, fy + rect.y * sc,
+                rect.width * sc, rect.height * sc,
+                index + 2, false, 0.92);
+        }
+        return;
+    }
+
+    const dockIc = Math.max(4, 52 * sc);
     const dockGap = Math.max(2, 8 * sc);
     const dockTW = DOCK_ICON_COUNT * dockIc + (DOCK_ICON_COUNT - 1) * dockGap;
     const dockSX = fx + (fW - dockTW) / 2;
-    const dockSY = dY + (dH - dockIc) / 2;
-    cr.setSourceRGBA(0.45, 0.55, 0.65, 0.35);
+    const dockSY = dY + (dH - dockIc) / 2 - 8 * sc;
+    cr.setSourceRGBA(0.12, 0.12, 0.16, 0.25);
+    roundedRect(cr, dockSX - 20 * sc, dockSY - 7 * sc,
+        dockTW + 40 * sc, dockIc + 14 * sc, Math.max(2, 14 * sc));
+    cr.fill();
     for (let i = 0; i < DOCK_ICON_COUNT; i++) {
-        roundedRect(cr, dockSX + i * (dockIc + dockGap), dockSY,
-            dockIc, dockIc, Math.max(1, 6 * sc));
-        cr.fill();
+        drawAppGlyph(cr, dockSX + i * (dockIc + dockGap), dockSY,
+            dockIc, dockIc, i + 2, false, 0.92);
     }
 }
 
@@ -249,6 +391,24 @@ function readGridConfig(settings) {
         colGap: settings.get_int('custom-column-spacing'),
         usePresets: false,
     };
+}
+
+function readFallbackPageCounts(shellSettings) {
+    try {
+        const pages = shellSettings.get_value('app-picker-layout').deepUnpack();
+        const counts = pages.map(page => page instanceof Map
+            ? page.size
+            : Object.keys(page ?? {}).length);
+        return splitPageItemCounts(counts);
+    } catch (_e) {
+        try {
+            const appCount = Gio.AppInfo.get_all()
+                .filter(app => app.should_show()).length;
+            return splitPageItemCounts([appCount]);
+        } catch (_error) {
+            return [DEFAULT_PAGE_CAPACITY];
+        }
+    }
 }
 
 export default class AppGridSizePrefs extends ExtensionPreferences {
@@ -504,6 +664,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         rightBox.append(fitLabel);
 
         const ps = {monitorW: 1920, monitorH: 1080};
+        const shellSettings = Gio.Settings.new('org.gnome.shell');
 
         const refreshMonitorSize = () => {
             try {
@@ -582,8 +743,10 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     grid.width - grid.paddingLeft - grid.paddingRight);
                 layout.iconAreaH = Math.max(100,
                     grid.height - grid.paddingTop - grid.paddingBottom);
-                layout.dashY = Math.min(mH - layout.dashH,
-                    grid.y + grid.height + layout.spacing);
+                if (!runtimeLayout.dashRect) {
+                    layout.dashY = Math.min(mH - layout.dashH,
+                        grid.y + grid.height + layout.spacing);
+                }
             }
             const fit = computeGridFit({
                 width: layout.iconAreaW,
@@ -599,15 +762,50 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 cellSize,
             } = fit;
 
+            const runtimeConfig = runtimeLayout?.config;
+            const activeRows = usePresets ? fitRows : rows;
+            const activeColumns = usePresets ? fitCols : columns;
+            const measuredItemsMatch = runtimeLayout?.version === 2 &&
+                runtimeLayout.settled === true &&
+                runtimeConfig?.iconSize === iconSize &&
+                runtimeConfig?.rows === activeRows &&
+                runtimeConfig?.columns === activeColumns &&
+                runtimeConfig?.rowGap === rowGap &&
+                runtimeConfig?.columnGap === colGap;
+            const fallbackPageCounts = readFallbackPageCounts(shellSettings);
+            const pageItemCounts = runtimeLayout?.pageItemCounts ??
+                fallbackPageCounts;
+            const currentPage = Math.min(
+                runtimeLayout?.currentPage ?? 0, pageItemCounts.length - 1);
+            const itemCount = pageItemCounts[currentPage] ??
+                runtimeLayout?.itemCount ?? 0;
             Object.assign(ps, layout, {
                 iconSize, rows, columns, rowGap, colGap,
                 fitRows, fitCols, usePresets, cellSize,
-                itemCount: runtimeLayout?.itemCount ?? null,
+                previewCellSize: Math.max(cellSize, SHELL_MIN_PREVIEW_TILE_SIZE),
+                itemCount,
+                measuredItems: measuredItemsMatch ? runtimeLayout.items : null,
+                searchRect: runtimeLayout?.settled
+                    ? runtimeLayout.searchRect ?? null : null,
+                workspaceRects: runtimeLayout?.settled
+                    ? runtimeLayout.workspaceRects ?? null : null,
+                workspaceCount: runtimeLayout?.workspaceCount ?? 2,
+                pageCount: pageItemCounts.length,
+                currentPage,
+                dashRect: runtimeLayout?.settled
+                    ? runtimeLayout.dashRect ?? null : null,
+                dashItems: runtimeLayout?.settled
+                    ? runtimeLayout.dashItems ?? null : null,
                 monitorW: mW, monitorH: mH,
             });
+            if (runtimeLayout?.panelRect)
+                ps.panelH = runtimeLayout.panelRect.height;
 
             aspectFrame.ratio = mW / mH;
-            const areaPrefix = runtimeLayout ? 'Live icon area' : 'Estimated icon area';
+            const areaPrefix = measuredItemsMatch
+                ? 'Live Shell geometry'
+                : runtimeLayout ? 'Live icon area · open Overview for exact placement'
+                    : 'Estimated icon area · open Overview for exact placement';
             screenLabel.label =
                 `Monitor: ${mW} × ${mH}  ·  ${areaPrefix}: ${layout.iconAreaW} × ${layout.iconAreaH}`;
 
@@ -640,6 +838,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         connectSignal(cleanupFns, settings,
             `changed::${PREVIEW_LAYOUT_KEY}`, updatePreview);
+        connectSignal(cleanupFns, shellSettings,
+            'changed::app-picker-layout', updatePreview);
         const monitors = display?.get_monitors();
         if (monitors)
             connectSignal(cleanupFns, monitors, 'items-changed', updatePreview);
@@ -652,7 +852,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 searchY, miniWsY, dashY,
                 iconAreaX, iconAreaYPos, iconAreaW, iconAreaH,
                 iconSize, rows, columns, rowGap, colGap,
-                fitRows, fitCols, usePresets, cellSize, itemCount,
+                fitRows, fitCols, usePresets, cellSize, previewCellSize, itemCount,
+                measuredItems, searchRect, workspaceRects, workspaceCount,
+                dashRect, dashItems, pageCount, currentPage,
             } = ps;
 
             const pad = PREVIEW_PADDING;
@@ -672,29 +874,38 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const fy = pad + (aH - fH) / 2;
             const sc = fW / monitorW;
 
-            cr.setSourceRGBA(0, 0, 0, 0.3);
+            cr.setSourceRGBA(0.015, 0.025, 0.07, 0.36);
             cr.rectangle(fx, fy, fW, fH);
             cr.fill();
 
             drawPanelSection(cr, fx, fy, fW, panelH, sc);
-            drawSearchSection(cr, fx, fW,
-                fy + searchY * sc, searchH * sc, sc);
-            drawMiniWsSection(cr, fx, fW,
-                fy + miniWsY * sc, miniWsH * sc, sc);
+            drawSearchSection(cr, fx, fy, fW,
+                fy + searchY * sc, searchH * sc, sc, searchRect);
+            drawMiniWsSection(cr, fx, fy, fW,
+                fy + miniWsY * sc, miniWsH * sc, sc,
+                workspaceRects, workspaceCount, monitorW / monitorH);
 
             const drawRows = usePresets ? fitRows : rows;
             const drawCols = usePresets ? fitCols : columns;
-            drawGridSection(cr,
-                fx + iconAreaX * sc, fy + iconAreaYPos * sc,
-                iconAreaW * sc, iconAreaH * sc,
-                drawRows, drawCols, fitRows, fitCols,
-                cellSize * sc, cellSize * sc,
-                iconSize * sc, iconSize * sc,
-                colGap * sc, rowGap * sc,
-                sc, usePresets, itemCount);
+            if (measuredItems?.length) {
+                drawMeasuredGridSection(cr, fx, fy, sc,
+                    measuredItems, iconSize);
+            } else {
+                drawGridSection(cr,
+                    fx + iconAreaX * sc,
+                    fy + (iconAreaYPos + SHELL_PREVIEW_GRID_TOP_INSET) * sc,
+                    iconAreaW * sc,
+                    (iconAreaH - SHELL_PREVIEW_GRID_TOP_INSET) * sc,
+                    drawRows, drawCols, fitRows, fitCols,
+                    previewCellSize * sc, previewCellSize * sc,
+                    iconSize * sc, iconSize * sc,
+                    colGap * sc, rowGap * sc,
+                    sc, usePresets, itemCount);
+            }
 
-            drawDashSection(cr, fx, fW,
-                fy + dashY * sc, dashH * sc, sc);
+            drawDashSection(cr, fx, fy, fW,
+                fy + dashY * sc, dashH * sc, sc,
+                dashRect, dashItems, pageCount, currentPage);
 
             cr.setDash([], 0);
         });

@@ -29,7 +29,7 @@ export default class AppGridSizeExtension extends Extension {
         this._overviewShownId = Main.overview.connect('shown', () => {
             const grid = this._findGrid()
             if (grid)
-                this._publishPreviewLayout(grid)
+                this._publishPreviewLayout(grid, true)
         })
         this._monitorsChangedId = Main.layoutManager.connect(
             'monitors-changed', () => this._onMonitorsChanged())
@@ -162,16 +162,63 @@ export default class AppGridSizeExtension extends Extension {
             const allocation = this._getAllocationSize(grid)
             if (allocation.width <= 0 || allocation.height <= 0)
                 return
+            if (Main.overview.visible)
+                this._publishPreviewLayout(grid, true)
             if (this._lastAllocation?.width === allocation.width &&
                 this._lastAllocation?.height === allocation.height)
                 return
             this._lastAllocation = allocation
-            this._publishPreviewLayout(grid)
             this._scheduleApply()
         })
     }
 
-    _publishPreviewLayout(grid) {
+    _measureActor(actor, monitor) {
+        if (!actor || typeof actor.get_transformed_position !== 'function' ||
+            typeof actor.get_transformed_size !== 'function')
+            return null
+        try {
+            const [x, y] = actor.get_transformed_position()
+            const [width, height] = actor.get_transformed_size()
+            if (![x, y, width, height].every(Number.isFinite) ||
+                width <= 0 || height <= 0)
+                return null
+            return {
+                x: Math.round(x - monitor.x),
+                y: Math.round(y - monitor.y),
+                width: Math.round(width),
+                height: Math.round(height),
+            }
+        } catch (_error) {
+            return null
+        }
+    }
+
+    _firstMeasuredActor(actors, monitor) {
+        for (const actor of actors) {
+            const rect = this._measureActor(actor, monitor)
+            if (rect)
+                return rect
+        }
+        return null
+    }
+
+    _measureWorkspaceActors(controls, monitor) {
+        const views = controls?._workspacesDisplay?._workspacesViews
+        if (!Array.isArray(views))
+            return []
+        const primaryIndex = Main.layoutManager.primaryIndex ?? 0
+        const view = views.find(candidate =>
+            candidate?._monitorIndex === primaryIndex) ?? views[primaryIndex] ?? views[0]
+        const workspaces = view?._workspaces
+        if (!Array.isArray(workspaces))
+            return []
+        return workspaces
+            .map(actor => this._measureActor(actor, monitor))
+            .filter(rect => rect && rect.width < monitor.width * 0.8 &&
+                rect.height < monitor.height * 0.5)
+    }
+
+    _publishPreviewLayout(grid, settled = false) {
         if (!this._settings)
             return
 
@@ -194,8 +241,37 @@ export default class AppGridSizeExtension extends Extension {
             : 0
         const itemCount = lm._pages?.[pageIndex]?.visibleChildren?.length ?? 0
         const padding = lm.page_padding
+        const controls = this._getControlsManager()
+        const pageItems = lm._pages?.[pageIndex]?.visibleChildren ?? []
+        const items = pageItems.map(actor => ({
+            tile: this._measureActor(actor, monitor),
+            icon: this._firstMeasuredActor([
+                actor?.icon?.icon,
+                actor?.icon?._icon,
+                actor?.icon,
+            ], monitor),
+            folder: actor?.constructor?.name?.includes('Folder') ?? false,
+        })).filter(item => item.tile)
+        const dash = controls?.dash ?? controls?._dash
+        const dashBox = dash?._box
+        const dashChildren = dashBox?.get_children?.() ?? []
+        let dashIconActors = dashChildren.filter(actor =>
+            actor?.child?._delegate?.icon && !actor.animatingOut)
+        if (!dashIconActors.length)
+            dashIconActors = dashChildren
+        if (dash?._showAppsIcon && !dashIconActors.includes(dash._showAppsIcon))
+            dashIconActors.push(dash._showAppsIcon)
+        const dashItems = dashIconActors
+            .map(actor => this._firstMeasuredActor([
+                actor?.child?._delegate?.icon?.icon,
+                actor?.child?._delegate?.icon,
+                actor?.icon?.icon,
+                actor?.icon,
+                actor,
+            ], monitor))
+            .filter(rect => rect && rect.width > 2 && rect.height > 2) ?? []
         const layout = JSON.stringify({
-            version: 1,
+            version: 2,
             monitor: {width: monitor.width, height: monitor.height},
             grid: {
                 x: Math.round(x),
@@ -208,6 +284,33 @@ export default class AppGridSizeExtension extends Extension {
                 paddingLeft: Math.round(padding.left),
             },
             itemCount,
+            pageItemCounts: lm._pages?.map(page =>
+                page.visibleChildren?.length ?? 0) ?? [itemCount],
+            pageCount: lm._pages?.length ?? 1,
+            currentPage: pageIndex,
+            settled,
+            config: this._activeConfig ? {
+                iconSize: this._activeConfig.iconSize,
+                rows: this._activeConfig.rows,
+                columns: this._activeConfig.columns,
+                rowGap: this._activeConfig.rowGap,
+                columnGap: this._activeConfig.columnGap,
+            } : null,
+            items,
+            panelRect: this._measureActor(Main.panel, monitor),
+            searchRect: this._firstMeasuredActor([
+                controls?.searchEntry,
+                controls?._searchEntry,
+                controls?._searchEntryBin?.child,
+            ], monitor),
+            workspaceRects: this._measureWorkspaceActors(controls, monitor),
+            workspaceCount: global.workspace_manager?.n_workspaces ?? 2,
+            dashRect: this._firstMeasuredActor([
+                dash?._background,
+                dashBox,
+                dash,
+            ], monitor),
+            dashItems,
         })
         if (this._settings.get_string(PREVIEW_LAYOUT_KEY) !== layout)
             this._settings.set_string(PREVIEW_LAYOUT_KEY, layout)

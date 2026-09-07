@@ -57,6 +57,7 @@ calculations used by both runtime and preferences code.
 | `MIN_GRID_DIMENSION` | `2` | Minimum rows/columns |
 | `PRESET_WIDTH_RATIO` | `2/3` | Portion of available width used for balanced-fit columns |
 | `UNCONSTRAINED_SPACING` | `-1` | max_row/column_spacing value to disable limit |
+| `DEFAULT_PAGE_CAPACITY` | `24` | Shell's default 4×6 boundary used to split fallback page counts |
 
 ### Shell layout estimation constants (prefs.js only)
 
@@ -79,8 +80,10 @@ Used by `estimateGridArea()` to approximate the GNOME Shell overview layout:
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `PREVIEW_PADDING` | `8` | Padding around the preview frame |
-| `DOCK_ICON_COUNT` | `5` | Number of dock icons drawn in preview |
+| `PREVIEW_PADDING` | `0` | Monitor content fills the preview frame edge to edge |
+| `DOCK_ICON_COUNT` | `9` | Fallback number of dock icons drawn in preview |
+| `SHELL_MIN_PREVIEW_TILE_SIZE` | `117` | Fallback tile size calibrated for labels widening Shell tiles |
+| `SHELL_PREVIEW_GRID_TOP_INSET` | `8` | Fallback inset matching the first visible tile row |
 
 ### Iterated arrays
 
@@ -271,11 +274,12 @@ iconAreaH = pageH - 2×SHELL_PAGE_PAD
 
 | Function | Draws |
 |---|---|
-| `drawPanelSection(cr, fx, fy, fW, panelH, sc)` | Top panel with Activities, clock, system indicators |
-| `drawSearchSection(cr, fx, fW, sY, sH, sc)` | Search bar with pill-shaped entry |
-| `drawMiniWsSection(cr, fx, fW, mwY, mwH, sc)` | Mini workspace thumbnails |
-| `drawGridSection(...)` | Icon grid cells (blue normal, red overflow, dim empty slots, green capacity border) |
-| `drawDashSection(cr, fx, fW, dY, dH, sc)` | Bottom dash with `DOCK_ICON_COUNT` dock icons |
+| `drawPanelSection(...)` | Top panel with Activities, clock, system indicators |
+| `drawSearchSection(...)` | Search entry at its measured or estimated rectangle |
+| `drawMiniWsSection(...)` | Measured or calibrated workspace thumbnails |
+| `drawGridSection(...)` | Estimated icon grid with occupied, overflow, and empty states |
+| `drawMeasuredGridSection(...)` | Live app tiles, inner icon rectangles, and labels |
+| `drawDashSection(...)` | Compact Dash, measured items, and page indicators |
 
 All section functions receive scaled coordinates from the main draw callback.
 
@@ -289,9 +293,14 @@ fitRows = max(MIN_GRID_DIMENSION, floor((iconAreaH + rowGap) / (cellSize + rowGa
 ```
 
 When available, the preview uses `runtime-preview-layout`, which the extension updates with
-the live monitor, grid allocation, page padding, and current-page item count. This keeps grid
-placement and visual density aligned with the Shell overview. Before a live snapshot exists,
-the preview falls back to `estimateGridArea()`.
+the live monitor, grid allocation, page padding, current-page item count, and measured actor
+rectangles for every visible app tile and icon, the search entry, workspace thumbnails, and
+Dash items. Settled actor geometry is captured while the overview is visible, so opening the
+overview once after changing the layout gives the preferences preview exact Shell positions.
+Before a settled snapshot exists, the preview falls back to `estimateGridArea()` and uses a
+117 px minimum tile size to account for labels widening Shell tiles. Its fallback item count
+comes from `org.gnome.shell`'s `app-picker-layout`, where folders are already single top-level
+items; oversized stored pages are split at the default 24-item boundary.
 
 In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`). In
 custom mode, it draws the user's configured `rows×columns` with overflow cells in red. Empty
@@ -402,6 +411,6 @@ gnome-extensions enable appgrid-size@luyao
 3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new
    order through Shell's page manager. Disabling the extension restores grid properties but
    cannot reconstruct the previous application order.
-4. **Preview estimates fixed pixel values**: `estimateGridArea()` uses the `SHELL_*` constants
-   derived from GNOME Shell 50 source. These may differ across themes, font sizes, or
-   display scaling.
+4. **Fallback preview estimates fixed pixel values**: Before the overview has published a
+   settled actor snapshot, `estimateGridArea()` uses the `SHELL_*` constants derived from
+   GNOME Shell 50 source. These may differ across themes, font sizes, or display scaling.

@@ -4,6 +4,9 @@
 
 - Enlarged the preferences preview to make better use of the right pane.
 - Matched preview placement, capacity, icon scale, and occupied cells to the live Shell grid allocation.
+- Replayed measured Shell tile, icon, search, workspace, and Dash geometry in the preview.
+- Calibrated the fallback tile, workspace, and compact Dock proportions against a 2560×1440 overview capture.
+- Matched preview icon counts to Shell's real per-page items, including folders and preserved 24-item page boundaries.
 
 ## 1.2.0 — 2026-09-07
 
