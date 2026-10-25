@@ -54,6 +54,7 @@ jobs:
           gnome-extensions pack --force \
             --extra-source=config.js \
             --extra-source=gridPages.js \
+            --extra-source=gridLayout.js \
             --extra-source=LICENSE \
             . --out-dir="$package_dir"
           archive="$package_dir/appgrid-size@luyao.shell-extension.zip"
