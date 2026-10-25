@@ -13,6 +13,12 @@ import {
     computePreviewTileSize,
 } from './config.js'
 import {reflowPages, restorePersistedPageOrder} from './gridPages.js'
+import {
+    getGridLayoutMode,
+    restoreGridLayout,
+    saveGridLayout,
+    setGridDimensions,
+} from './gridLayout.js'
 
 const ENFORCED_PROPERTIES = [
     'row-spacing', 'column-spacing',
@@ -371,8 +377,7 @@ export default class AppGridSizeExtension extends Extension {
     _saveOriginalValues(lm, grid) {
         if (this._original?.layoutManager === lm)
             return
-        if (!Array.isArray(grid._gridModes))
-            throw new Error('AppGrid grid modes are unavailable')
+        grid.ensure_style()
         this._original = {
             layoutManager: lm,
             iconSize: lm.fixed_icon_size,
@@ -384,7 +389,7 @@ export default class AppGridSizeExtension extends Extension {
             maxColumnSpacing: lm.max_column_spacing,
             pageValign: lm.page_valign,
             pageHalign: lm.page_halign,
-            modes: grid._gridModes.map(m => ({rows: m.rows, columns: m.columns})),
+            layout: saveGridLayout(grid),
         }
     }
 
@@ -431,10 +436,7 @@ export default class AppGridSizeExtension extends Extension {
 
     _applyLayout(grid, lm, config) {
         lm.fixed_icon_size = config.iconSize
-        grid._currentMode = -1
-        grid.setGridModes([{rows: config.rows, columns: config.columns}])
-        lm.rows_per_page = config.rows
-        lm.columns_per_page = config.columns
+        setGridDimensions(grid, config.rows, config.columns)
         lm.row_spacing = config.rowGap
         lm.column_spacing = config.columnGap
         lm.max_row_spacing = UNCONSTRAINED_SPACING
@@ -484,8 +486,12 @@ export default class AppGridSizeExtension extends Extension {
             return
 
         const grid = this._findGrid()
-        if (!grid?.layout_manager || typeof grid.setGridModes !== 'function') {
-            console.warn('[appgrid-size] compatible AppGrid not found')
+        if (!grid?.layout_manager) {
+            console.warn('[appgrid-size] AppGrid not found')
+            return
+        }
+        if (!getGridLayoutMode(grid)) {
+            console.warn('[appgrid-size] AppGrid layout API is unsupported')
             return
         }
 
@@ -559,8 +565,7 @@ export default class AppGridSizeExtension extends Extension {
             return
 
         lm.fixed_icon_size = original.iconSize
-        grid._currentMode = -1
-        grid.setGridModes(original.modes)
+        restoreGridLayout(grid, original.layout)
         lm.rows_per_page = original.rows
         lm.columns_per_page = original.columns
         lm.row_spacing = original.rowSpacing

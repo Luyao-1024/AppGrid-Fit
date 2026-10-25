@@ -127,6 +127,17 @@ vSpacing = rowSpacing + (pageHeight - usedHeight - rowSpacing×(rows-1) - paddin
 = START` makes `vSpacing = row_spacing` (exact). `page_halign = CENTER` centers icons
 horizontally with exact `column_spacing`.
 
+### Upstream and Ubuntu layout compatibility
+
+`gridLayout.js` detects capabilities rather than distribution names. Upstream grids use
+`setGridModes()` and `_gridModes`; Ubuntu 26.04 removes both and computes dimensions in
+`IconGridLayout.adaptToSize()`. On that implementation, set `_fixedRows` and `_fixedCols`
+alongside `rows_per_page` and `columns_per_page` so allocation preserves the requested grid.
+Original mode arrays or fixed-dimension property presence/values are saved on first apply
+and restored on disable or partial failure. Resolve the grid's theme style before capturing
+defaults because spacing may still be zero during Shell startup. Do not require grid modes
+to find a compatible grid.
+
 ### CSS override defense
 
 `IconGrid.vfunc_style_changed()` resets spacing properties from CSS on theme switches.
@@ -358,6 +369,7 @@ glib-compile-schemas schemas/
 gnome-extensions pack --force \
   --extra-source=config.js \
   --extra-source=gridPages.js \
+  --extra-source=gridLayout.js \
   --extra-source=LICENSE \
   "$(pwd)"
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
@@ -390,6 +402,7 @@ gnome-extensions enable appgrid-size@luyao
 |------|---------|
 | `config.js` | Shared presets, setting keys, fit and pixel-size calculations |
 | `gridPages.js` | Testable saved-order restoration, page overflow, and optional consolidation adapter |
+| `gridLayout.js` | Capability detection, dimension overrides, and restoration for upstream and Ubuntu layouts |
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
 | `tests/*.test.js` | Node unit tests for shared calculations and page reflow |

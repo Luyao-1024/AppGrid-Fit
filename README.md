@@ -2,7 +2,7 @@
 
 A GNOME Shell extension (46–50) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
-Current version: **1.3.1**
+Current version: **1.3.2**
 
 ## Features
 
@@ -53,6 +53,7 @@ glib-compile-schemas schemas/
 gnome-extensions pack --force \
   --extra-source=config.js \
   --extra-source=gridPages.js \
+  --extra-source=gridLayout.js \
   --extra-source=LICENSE \
   "$(pwd)"
 
@@ -83,6 +84,7 @@ The preferences window uses a horizontal layout with controls on the left and a 
 ## Requirements
 
 - GNOME Shell 46, 47, 48, 49, or 50
+- Supports both upstream grid modes and Ubuntu 26.04's adaptive App Grid layout.
 
 ## License
 

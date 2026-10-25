@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2 — 2026-10-25
+
+- Fixed App Grid customization on Ubuntu 26.04, where Shell no longer provides `setGridModes()`.
+- Restored theme spacing and automatic fitting when the extension is disabled.
+
 ## 1.3.1 — 2026-09-07
 
 - Preserved drag-and-drop app order across login when a configured page holds more than Shell's default 24 items.
