@@ -21,6 +21,8 @@ import {
 } from './gridPages.js'
 import {
     applyAppNameVisibility,
+    applyFolderDialogSize,
+    applyFolderDialogSizes,
     applyFolderLayouts,
     getFolderGrids,
     getGridLayoutMode,
@@ -72,6 +74,7 @@ export default class AppGridSizeExtension extends Extension {
 
     disable() {
         this._cancelScheduledApply()
+        this._cancelFolderDialogSize()
         this._disconnectOverview()
         this._disconnectMonitorsChanged()
         this._disconnectTheme()
@@ -85,9 +88,11 @@ export default class AppGridSizeExtension extends Extension {
         this._settings = null
         this._original = null
         this._originalFolders = new Map()
+        this._originalFolderDialogs = new WeakMap()
         this._originalLabels = new Map()
         this._folderEnforcerIds = new Map()
         this._folderSignalIds = new Map()
+        this._folderOpenOriginals = new Map()
         this._activeConfig = null
         this._applied = false
         this._notifyIds = []
@@ -105,6 +110,7 @@ export default class AppGridSizeExtension extends Extension {
         this._restoredOrderLayoutManager = null
         this._lastAllocation = null
         this._scheduledApplyId = 0
+        this._dialogSizeId = 0
         this._themeContext = null
         this._themeChangedId = 0
         this._themeChanged = false
@@ -191,6 +197,26 @@ export default class AppGridSizeExtension extends Extension {
             return
         GLib.source_remove(this._scheduledApplyId)
         this._scheduledApplyId = 0
+    }
+
+    _cancelFolderDialogSize() {
+        if (!this._dialogSizeId)
+            return
+        GLib.source_remove(this._dialogSizeId)
+        this._dialogSizeId = 0
+    }
+
+    _scheduleFolderDialogSize() {
+        if (!this._settings || this._dialogSizeId)
+            return
+        this._dialogSizeId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._dialogSizeId = 0
+            if (this._applied && this._activeConfig) {
+                applyFolderDialogSizes(this._getAppDisplay(),
+                    this._folderDialogConfig(), this._originalFolderDialogs)
+            }
+            return GLib.SOURCE_REMOVE
+        })
     }
 
     _scheduleApply() {
@@ -597,17 +623,23 @@ export default class AppGridSizeExtension extends Extension {
         lm.page_halign = Clutter.ActorAlign.CENTER
     }
 
-    _applyFolderLayouts() {
-        if (!this._applied || !this._activeConfig)
-            return
+    _folderDialogConfig() {
         const config = this._activeConfig
-        applyFolderLayouts(this._getAppDisplay(), {
+        return {
             iconSize: config.iconSize,
             rows: config.folderRows,
             columns: config.folderColumns,
             rowSpacing: config.folderRowSpacing,
             columnSpacing: config.folderColumnSpacing,
-        }, this._originalFolders)
+        }
+    }
+
+    _applyFolderLayouts() {
+        if (!this._applied || !this._activeConfig)
+            return
+        applyFolderLayouts(this._getAppDisplay(),
+            this._folderDialogConfig(), this._originalFolders,
+            this._originalFolderDialogs)
     }
 
     _applyAppNameVisibility() {
@@ -619,7 +651,8 @@ export default class AppGridSizeExtension extends Extension {
 
     _restoreFolderLayouts() {
         this._disconnectFolderEnforcers()
-        restoreFolderLayouts(this._getAppDisplay(), this._originalFolders)
+        restoreFolderLayouts(this._getAppDisplay(), this._originalFolders,
+            this._originalFolderDialogs)
     }
 
     _restoreAppNameVisibility() {
@@ -683,32 +716,82 @@ export default class AppGridSizeExtension extends Extension {
         const icons = this._getAppDisplay()?._folderIcons
         if (!Array.isArray(icons))
             return
-        for (const [icon, id] of this._folderSignalIds) {
+        for (const [icon, ids] of this._folderSignalIds) {
             if (icons.includes(icon))
                 continue
-            try {
-                icon.disconnect(id)
-            } catch (_error) {}
+            for (const id of ids) {
+                try {
+                    icon.disconnect(id)
+                } catch (_error) {}
+            }
             this._folderSignalIds.delete(icon)
+            this._restoreFolderOpen(icon)
         }
         for (const icon of icons) {
             if (!icon || this._folderSignalIds.has(icon) ||
                 typeof icon.connect !== 'function')
                 continue
+            const ids = []
+            const extension = this
             try {
-                const id = icon.connect('apps-changed',
-                    () => this._scheduleApply())
-                this._folderSignalIds.set(icon, id)
+                ids.push(icon.connect('apps-changed',
+                    () => this._scheduleApply()))
+                ids.push(icon.connect('destroy', () => {
+                    extension._folderSignalIds.delete(icon)
+                    extension._folderOpenOriginals.delete(icon)
+                }))
+                this._patchFolderOpen(icon)
+                const grid = icon.view?._grid
+                if (grid && typeof grid.connect === 'function') {
+                    ids.push(grid.connect('notify::allocation', () => {
+                        if (icon._dialog?.visible)
+                            extension._scheduleFolderDialogSize()
+                    }))
+                }
             } catch (_error) {}
+            this._folderSignalIds.set(icon, ids)
         }
     }
 
-    _disconnectFolderSignals() {
-        for (const [icon, id] of this._folderSignalIds) {
+    _patchFolderOpen(icon) {
+        const open = icon.open
+        if (typeof open !== 'function' ||
+            this._folderOpenOriginals.has(icon))
+            return
+        const extension = this
+        this._folderOpenOriginals.set(icon, open)
+        icon.open = function (...args) {
             try {
-                icon.disconnect(id)
+                icon._ensureFolderDialog?.()
+                applyFolderDialogSize(icon,
+                    extension._folderDialogConfig(),
+                    extension._originalFolderDialogs)
             } catch (_error) {}
+            return open.apply(this, args)
         }
+    }
+
+    _restoreFolderOpen(icon) {
+        const open = this._folderOpenOriginals.get(icon)
+        if (!open)
+            return
+        this._folderOpenOriginals.delete(icon)
+        try {
+            if (icon.open !== open)
+                icon.open = open
+        } catch (_error) {}
+    }
+
+    _disconnectFolderSignals() {
+        for (const [icon, ids] of this._folderSignalIds) {
+            for (const id of ids) {
+                try {
+                    icon.disconnect(id)
+                } catch (_error) {}
+            }
+        }
+        for (const icon of this._folderOpenOriginals.keys())
+            this._restoreFolderOpen(icon)
         this._folderSignalIds.clear()
     }
 

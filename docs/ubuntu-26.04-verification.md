@@ -49,23 +49,23 @@ pages. The cloud image uses the standard horizontal Dash; Ubuntu Dock is not ins
 Results on 2026-10-26 with QEMU 10.2.2/KVM, 2 vCPU, 4096 MiB, 1920×1080 virtual monitor and
 the extension built from this repository:
 
-- `ubuntu-24.04`: 69 checks passed.
-- `ubuntu-26.04`: 69 checks passed.
-- `fedora-44`: 69 checks passed.
-- `fedora-51`: 69 checks passed.
+- `ubuntu-24.04`: 84 checks passed.
+- `ubuntu-26.04`: 84 checks passed.
+- `fedora-44`: 84 checks passed.
+- `fedora-51`: 84 checks passed.
 
 The QEMU guest sets `TEST_FOLDER=1`. The probe creates a temporary folder from four dummy
 apps, opens it at 32 px and 96 px, and asserts that the folder dialog's child icons follow
-the configured size. It then configures folder rows/columns and gaps, hides and shows app
-names in the main grid and folder dialog, and disables the extension while the folder is
-open to verify Shell's native sizing, dimensions and derived symmetric spacing come back.
-Folder settings are backed up and restored; legacy harnesses leave `TEST_FOLDER` unset and
-never touch folder settings.
+the configured size. It also verifies that the dialog panel hugs the content: the used grid
+is 1×4 instead of the configured 3×4, the panel width/height match the tile size, gaps and
+page padding, the panel shrinks when labels are hidden and grows back when they are shown,
+and disabling the extension restores Shell's default panel size. Folder settings are backed
+up and restored; legacy harnesses leave `TEST_FOLDER` unset and never touch folder settings.
 
-The headless runs have 69 checks: the standard horizontal Dash emits two geometry checks
-instead of the live VM's three, and the QEMU guest adds six folder/name checks. The legacy
-live VM runs 64 checks and the legacy Fedora headless harness runs 63 because they do not
-enable `TEST_FOLDER`.
+The headless runs have 84 checks: the standard horizontal Dash emits two geometry checks
+instead of the live VM's three, and the QEMU guest adds twenty-one folder/name/dialog-fit
+checks. The legacy live VM runs 64 checks and the legacy Fedora headless harness runs 63
+because they do not enable `TEST_FOLDER`.
 
 ## Environment (legacy live VM)
 
@@ -136,9 +136,11 @@ human inspection.
 | Theme unload | Default CSS limits are restored after disabling |
 | Consolidation | Enabling consolidation with 2×3 capacity fills pages to `[6, 6, 1]` without changing flattened order |
 | Saved order | Restoring `app-picker-layout` rebuilds `[6, 5, 2]` in the original order |
-| Folder layout | Folder dialog child icons follow 32 px and 96 px; rows 3 × columns 4; gaps 8/14 px |
+| Folder layout | Folder dialog child icons follow 32 px and 96 px; a four-app folder uses 1×4 instead of the configured 3×4; gaps 8/14 px |
+| Folder dialog fit | Panel width/height match tiles, gaps and page padding at both icon sizes, shrink when labels are hidden and return when shown |
+| Folder paging | Six apps merge back into one page after capacity grows, and a 2×2 grid reflows them into two pages; the panel returns to Shell's default size while paged |
 | App names | `show-app-names=false` hides labels in the main grid and folder dialog, and restores them when re-enabled |
-| Folder disable | Restores adaptive icon size, 3×3 dimensions and Shell's native symmetric spacing |
+| Folder disable | Restores adaptive icon size, 3×3 dimensions, Shell's native symmetric spacing and the default panel size |
 
 Screenshots from the harness are stored in `/tmp/appgrid-vm/` by default
 (`app-grid.png`, `prefs.png`). The final overview shows Ubuntu's left dock, centered page

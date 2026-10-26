@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
     applyAppNameVisibility,
     applyFolderLayouts,
+    computeFolderContentDimensions,
+    computeFolderDialogSize,
     getFolderGrids,
     getGridLayoutMode,
     getIconLabels,
@@ -316,4 +318,218 @@ test('app name visibility covers the grid and folder dialogs', () => {
     assert.equal(folderLabel.visible, true)
     assert.equal(hiddenLabel.visible, false)
     assert.equal(originals.size, 0)
+})
+
+function contentFolderGrid(count = 4, cellSize = 100) {
+    const grid = folderGrid()
+    grid.layout_manager.page_padding = {
+        top: 24, right: 18, bottom: 24, left: 18,
+    }
+    grid.layout_manager._pages = [{
+        visibleChildren: Array.from({length: count}, () => ({
+            visible: true,
+            get_preferred_size: () =>
+                [cellSize, cellSize, cellSize, cellSize],
+        })),
+    }]
+    return grid
+}
+
+function contentFolderDialog(titleHeight = 80) {
+    const box = {
+        style: '',
+        width: -1,
+        height: -1,
+        get_style() {
+            return this.style
+        },
+        set_style(value) {
+            this.style = value
+        },
+        queue_relayout() {},
+    }
+    return {
+        _viewBox: box,
+        _entryBox: {
+            get_preferred_height: () => [titleHeight, titleHeight],
+        },
+        ensure_style() {},
+    }
+}
+
+test('folder content dimensions use only the rows and columns in use', () => {
+    assert.deepEqual(computeFolderContentDimensions(4, 3, 3),
+        {rows: 2, columns: 3, paged: false})
+    assert.deepEqual(computeFolderContentDimensions(2, 3, 3),
+        {rows: 1, columns: 2, paged: false})
+    assert.deepEqual(computeFolderContentDimensions(1, 3, 3),
+        {rows: 1, columns: 1, paged: false})
+    assert.deepEqual(computeFolderContentDimensions(9, 3, 3),
+        {rows: 3, columns: 3, paged: false})
+    assert.deepEqual(computeFolderContentDimensions(10, 3, 3),
+        {rows: 3, columns: 3, paged: true})
+    assert.deepEqual(computeFolderContentDimensions(null, 3, 3),
+        {rows: 3, columns: 3, paged: false})
+    assert.deepEqual(computeFolderContentDimensions(0, 0, 0),
+        {rows: 1, columns: 1, paged: false})
+})
+
+test('folder dialog size follows cells, gaps, title and page padding', () => {
+    assert.deepEqual(computeFolderDialogSize({
+        rows: 2,
+        columns: 3,
+        cellSize: 100,
+        rowSpacing: 8,
+        columnSpacing: 14,
+        pagePadding: {top: 24, right: 18, bottom: 24, left: 18},
+        titleHeight: 80,
+        border: {top: 0, right: 1, bottom: 0, left: 1},
+    }), {
+        width: 3 * 100 + 2 * 14 + 36 + 2,
+        height: 80 + 2 * 100 + 8 + 48,
+    })
+})
+
+test('folder dialogs shrink to content and restore', () => {
+    const grid = contentFolderGrid(4, 100)
+    const dialog = contentFolderDialog(80)
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    const lm = grid.layout_manager
+    assert.deepEqual(grid._gridModes, [{rows: 2, columns: 3}])
+    assert.equal(lm.rows_per_page, 2)
+    assert.equal(lm.columns_per_page, 3)
+    assert.equal(dialog._viewBox.style,
+        'width: 366px; height: 336px;')
+    assert.equal(dialogOriginals.size, 1)
+    assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
+        style: '',
+        width: null,
+        height: null,
+    })
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+    assert.equal(dialog._viewBox.style, '')
+    assert.equal(dialog._viewBox.width, -1)
+    assert.equal(dialog._viewBox.height, -1)
+    assert.equal(lm.rows_per_page, 3)
+    assert.equal(lm.columns_per_page, 3)
+    assert.equal(dialogOriginals.size, 0)
+})
+
+test('paged folders keep the configured dialog grid', () => {
+    const grid = contentFolderGrid(10, 100)
+    const dialog = contentFolderDialog(80)
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.deepEqual(grid._gridModes, [{rows: 3, columns: 3}])
+    assert.equal(dialog._viewBox.style, '')
+    assert.equal(dialogOriginals.size, 0)
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+})
+
+test('folder dimension changes reflow stale pages', () => {
+    const item = () => ({
+        visible: true,
+        get_preferred_size: () => [100, 100, 100, 100],
+    })
+    const grid = folderGrid()
+    grid.layout_manager.page_padding = {
+        top: 24, right: 18, bottom: 24, left: 18,
+    }
+    grid.layout_manager.allowIncompletePages = false
+    grid.layout_manager._pages = [
+        {visibleChildren: Array.from({length: 4}, item)},
+        {visibleChildren: Array.from({length: 2}, item)},
+    ]
+    let updated = 0
+    const filled = []
+    grid.layout_manager._updatePages = () => {
+        updated += 1
+    }
+    grid.layout_manager._fillItemVacancies = index => {
+        filled.push(index)
+    }
+    const dialog = contentFolderDialog(80)
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 4,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.deepEqual(grid._gridModes, [{rows: 2, columns: 4}])
+    assert.equal(updated, 1)
+    assert.deepEqual(filled, [0, 1])
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+})
+
+
+test('fixed-size adaptive folder dialogs follow content and restore', () => {
+    const grid = contentFolderGrid(4, 100)
+    delete grid._gridModes
+    delete grid.setGridModes
+    grid.layout_manager._updatePages = () => {}
+    grid.layout_manager.adaptToSize = () => {}
+    const dialog = contentFolderDialog(80)
+    dialog._viewBox.width = 550
+    dialog._viewBox.height = 550
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.equal(dialog._viewBox.style,
+        'width: 366px; height: 336px;')
+    assert.equal(dialog._viewBox.width, 366)
+    assert.equal(dialog._viewBox.height, 336)
+    assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
+        style: '',
+        width: 550,
+        height: 550,
+    })
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+    assert.equal(dialog._viewBox.style, '')
+    assert.equal(dialog._viewBox.width, 550)
+    assert.equal(dialog._viewBox.height, 550)
+    assert.equal(dialogOriginals.size, 0)
 })

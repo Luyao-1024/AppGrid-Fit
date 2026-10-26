@@ -25,6 +25,12 @@ FOLDER_APPS = [
     'appgrid-test-12.desktop',
     'appgrid-test-13.desktop',
 ]
+FOLDER_ROWS = 3
+FOLDER_COLUMNS = 4
+FOLDER_ROW_SPACING = 8
+FOLDER_COLUMN_SPACING = 14
+FOLDER_EFFECTIVE_ROWS = 1
+FOLDER_EFFECTIVE_COLUMNS = 4
 HOME = Path.home()
 DATA_HOME = Path(os.environ.get('XDG_DATA_HOME', HOME / '.local/share'))
 EXTENSION_DIR = DATA_HOME / 'gnome-shell/extensions' / UUID
@@ -301,15 +307,57 @@ const folder = appDisplay._folderIcons.find(
     icon => icon._id === {json.dumps(FOLDER_ID)});
 const grid = folder?.view?._grid;
 const lm = grid?.layout_manager;
+const dialog = folder?._dialog;
+const box = dialog?._viewBox;
+const padding = lm?.page_padding;
+let cssPadding = null;
+try {{
+    if (grid?.get_stage?.()) {{
+        const node = grid.get_theme_node();
+        cssPadding = {{
+            top: node.get_length('page-padding-top'),
+            right: node.get_length('page-padding-right'),
+            bottom: node.get_length('page-padding-bottom'),
+            left: node.get_length('page-padding-left'),
+        }};
+    }}
+}} catch (error) {{}}
+const items = (lm?._pages ?? []).flatMap(
+    page => page.visibleChildren ?? []);
+let cellSize = 0;
+for (const item of items) {{
+    try {{
+        const [width, height] = item.get_preferred_size();
+        cellSize = Math.max(cellSize, width, height);
+    }} catch (error) {{}}
+}}
 JSON.stringify({{
     found: !!folder,
-    open: folder?._dialog?.visible ?? false,
+    open: dialog?.visible ?? false,
     fixedIconSize: lm?.fixed_icon_size ?? null,
     effectiveIconSize: lm?._iconSize ?? null,
     rows: lm?.rows_per_page ?? null,
     columns: lm?.columns_per_page ?? null,
     rowSpacing: lm?.row_spacing ?? null,
     columnSpacing: lm?.column_spacing ?? null,
+    itemCount: items.length,
+    pageCount: lm?._pages?.length ?? null,
+    pageWidth: lm?._pageWidth ?? null,
+    pageHeight: lm?._pageHeight ?? null,
+    cellSize: cellSize > 0 ? Math.ceil(cellSize) : null,
+    pagePadding: padding ? {{
+        top: padding.top,
+        right: padding.right,
+        bottom: padding.bottom,
+        left: padding.left,
+    }} : null,
+    cssPagePadding: cssPadding,
+    dialog: box ? {{
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+        style: box.get_style(),
+        titleHeight: Math.round(dialog._entryBox?.height ?? 0),
+    }} : null,
     folderTileLabel: folder?.icon?.label?.visible ?? null,
     mainLabels: [...appDisplay._grid].map(
         child => child.icon?.label?.visible ?? null),
@@ -319,6 +367,8 @@ JSON.stringify({{
     childIcons: grid
         ? [...grid].map(child => child.icon?.iconSize ?? null)
         : [],
+    itemIds: (lm?._pages ?? []).flatMap(
+        page => (page.visibleChildren ?? []).map(item => item.id)),
 }});
 ''')
 
@@ -379,11 +429,61 @@ def restore_test_folder(backup):
         backup['raw_children'])
 
 
+def dialog_fit_metrics(state):
+    dialog = state.get('dialog') or {}
+    padding = state.get('pagePadding') or {}
+    if not any(isinstance(value, (int, float)) and value > 0
+               for value in padding.values()):
+        padding = state.get('cssPagePadding') or padding
+    values = [
+        state.get('rows'), state.get('columns'), state.get('cellSize'),
+        dialog.get('width'), dialog.get('height'),
+        dialog.get('titleHeight'), state.get('pageHeight'),
+        padding.get('top'), padding.get('right'),
+        padding.get('bottom'), padding.get('left'),
+    ]
+    if any(not isinstance(value, (int, float)) for value in values):
+        return None
+    content_width = (state['columns'] * state['cellSize'] +
+        max(0, state['columns'] - 1) * FOLDER_COLUMN_SPACING +
+        padding['left'] + padding['right'])
+    content_height = (state['rows'] * state['cellSize'] +
+        max(0, state['rows'] - 1) * FOLDER_ROW_SPACING +
+        padding['top'] + padding['bottom'])
+    return {
+        'expectedWidth': round(content_width + 2),
+        'expectedHeight': round(dialog['titleHeight'] + content_height),
+        'widthDelta': round(dialog['width'] - (content_width + 2)),
+        'heightDelta': round(
+            dialog['height'] - (dialog['titleHeight'] + content_height)),
+        'pageHeightDelta': round(state['pageHeight'] - content_height),
+        'style': dialog.get('style'),
+    }
+
+
+def folder_dialog_fits(state):
+    metrics = dialog_fit_metrics(state)
+    return bool(metrics and
+        abs(metrics['widthDelta']) <= 6 and
+        abs(metrics['heightDelta']) <= 6 and
+        abs(metrics['pageHeightDelta']) <= 2 and
+        (metrics['style'] or '').strip())
+
+
+def check_folder_dialog_fit(state, label):
+    metrics = dialog_fit_metrics(state)
+    check(f'folder dialog fits content ({label})',
+        folder_dialog_fits(state),
+        {'metrics': metrics, 'state': state})
+    return metrics
+
+
 def check_folder_icon_sizes():
-    gs_set('folder-rows', 3)
-    gs_set('folder-columns', 4)
-    gs_set('folder-row-spacing', 8)
-    gs_set('folder-column-spacing', 14)
+    gs_set('folder-rows', FOLDER_ROWS)
+    gs_set('folder-columns', FOLDER_COLUMNS)
+    gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
+    gs_set('folder-column-spacing', FOLDER_COLUMN_SPACING)
+    dialog_heights = {}
     for size in (32, 96):
         gs_set('custom-icon-size', size)
         wait_for_config(size, 2, 3)
@@ -393,12 +493,16 @@ def check_folder_icon_sizes():
                 lambda: (state := folder_state()) and
                     state.get('open') and
                     state.get('effectiveIconSize') == size and
-                    state.get('rows') == 3 and
-                    state.get('columns') == 4 and
-                    state.get('rowSpacing') == 8 and
-                    state.get('columnSpacing') == 14 and
+                    state.get('rows') == FOLDER_EFFECTIVE_ROWS and
+                    state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+                    state.get('rowSpacing') == FOLDER_ROW_SPACING and
+                    state.get('columnSpacing') == FOLDER_COLUMN_SPACING and
                     len(state.get('childIcons') or []) == len(FOLDER_APPS) and
                     all(icon == size for icon in state['childIcons']) and
+                    state.get('dialog') and
+                    state['dialog']['width'] > 0 and
+                    state['dialog']['height'] > 0 and
+                    folder_dialog_fits(state) and
                     state,
                 f'folder grid at {size}px')
         except RuntimeError as error:
@@ -407,13 +511,22 @@ def check_folder_icon_sizes():
         check(f'folder child icons follow {size}px setting',
             state['effectiveIconSize'] == size and
             all(icon == size for icon in state['childIcons']), state)
+        check_folder_dialog_fit(state, f'{size}px icons')
+        check(f'folder dialog is smaller than the default at {size}px',
+            state['dialog']['height'] < 700, state['dialog'])
+        dialog_heights[size] = state['dialog']['height']
         time.sleep(0.5)
 
-    check('folder layout follows settings',
-        state.get('rows') == 3 and state.get('columns') == 4 and
-        state.get('rowSpacing') == 8 and state.get('columnSpacing') == 14,
+    check('folder layout follows content and settings',
+        state.get('rows') == FOLDER_EFFECTIVE_ROWS and
+        state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+        state.get('rowSpacing') == FOLDER_ROW_SPACING and
+        state.get('columnSpacing') == FOLDER_COLUMN_SPACING,
         state)
+    check('folder dialog height follows the icon size',
+        dialog_heights[32] < dialog_heights[96], dialog_heights)
 
+    named_height = state['dialog']['height']
     gs_set('show-app-names', False)
     hidden = wait_for(
         lambda: (state := folder_state()) and
@@ -423,12 +536,16 @@ def check_folder_icon_sizes():
             state.get('mainLabels') and
             all(value is False for value in state['mainLabels']
                 if value is not None) and
+            state.get('dialog') and
+            state['dialog']['height'] < named_height - 8 and
+            folder_dialog_fits(state) and
             state,
         'app names hidden')
     check('app names hide in grid and folders',
         all(value is False for value in hidden['childLabels']) and
         all(value is False for value in hidden['mainLabels']
             if value is not None), hidden)
+    check_folder_dialog_fit(hidden, 'labels hidden')
 
     gs_set('show-app-names', True)
     shown = wait_for(
@@ -439,12 +556,92 @@ def check_folder_icon_sizes():
             state.get('mainLabels') and
             all(value is True for value in state['mainLabels']
                 if value is not None) and
+            state.get('dialog') and
+            state['dialog']['height'] >= named_height - 2 and
+            folder_dialog_fits(state) and
             state,
         'app names shown')
     check('app names show again',
         all(value is True for value in shown['childLabels']) and
         all(value is True for value in shown['mainLabels']
             if value is not None), shown)
+    check_folder_dialog_fit(shown, 'labels shown')
+
+    expanded_apps = FOLDER_APPS + [
+        'appgrid-test-14.desktop',
+        'appgrid-test-15.desktop',
+    ]
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(expanded_apps))
+    expanded = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('itemCount') == len(expanded_apps) and
+            state.get('rows') == 2 and
+            state.get('columns') == FOLDER_COLUMNS and
+            state.get('pageCount') == 1 and
+            state.get('itemIds') == expanded_apps and
+            folder_dialog_fits(state) and
+            state,
+        'six-app folder content fit')
+    check('growing folder content merges into one page',
+        expanded['rows'] == 2 and expanded['columns'] == FOLDER_COLUMNS and
+        expanded['pageCount'] == 1 and
+        expanded['itemIds'] == expanded_apps, expanded)
+    check_folder_dialog_fit(expanded, 'six apps')
+
+    gs_set('folder-rows', 2)
+    gs_set('folder-columns', 2)
+    paged = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 2 and
+            state.get('columns') == 2 and
+            state.get('pageCount') == 2 and
+            state.get('itemCount') == len(expanded_apps) and
+            state.get('itemIds') == expanded_apps and
+            state.get('dialog') and
+            not (state['dialog'].get('style') or '').strip() and
+            state['dialog']['height'] >= 500 and
+            state,
+        'paged six-app folder')
+    check('shrinking folder capacity reflows into pages',
+        paged['rows'] == 2 and paged['columns'] == 2 and
+        paged['pageCount'] == 2 and
+        paged['itemIds'] == expanded_apps and
+        not (paged['dialog'].get('style') or '').strip(),
+        paged)
+
+    gs_set('folder-rows', FOLDER_ROWS)
+    gs_set('folder-columns', FOLDER_COLUMNS)
+    merged = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 2 and
+            state.get('columns') == FOLDER_COLUMNS and
+            state.get('pageCount') == 1 and
+            state.get('itemIds') == expanded_apps and
+            folder_dialog_fits(state) and
+            state,
+        'merged six-app folder')
+    check('growing folder capacity merges pages again',
+        merged['pageCount'] == 1 and merged['rows'] == 2 and
+        merged['columns'] == FOLDER_COLUMNS and
+        merged['itemIds'] == expanded_apps, merged)
+    check_folder_dialog_fit(merged, 'paged-to-fit')
+
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(FOLDER_APPS))
+    shrunk = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('itemCount') == len(FOLDER_APPS) and
+            state.get('itemIds') == FOLDER_APPS and
+            state.get('rows') == FOLDER_EFFECTIVE_ROWS and
+            state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+            state.get('pageCount') == 1 and
+            folder_dialog_fits(state) and
+            state,
+        'restored four-app folder')
+    check_folder_dialog_fit(shrunk, 'apps restored')
 
     set_extension_enabled(False)
     try:
@@ -457,6 +654,9 @@ def check_folder_icon_sizes():
                 (state.get('rowSpacing') or 0) > 0 and
                 state.get('rowSpacing') == state.get('columnSpacing') and
                 state.get('rowSpacing') not in (8, 14) and
+                state.get('dialog') and
+                not (state['dialog'].get('style') or '').strip() and
+                state['dialog']['height'] >= 500 and
                 state,
             'folder adaptive layout restoration')
     except RuntimeError as error:
@@ -469,8 +669,22 @@ def check_folder_icon_sizes():
         restored['rowSpacing'] == restored['columnSpacing'] and
         restored['rowSpacing'] not in (8, 14),
         restored)
+    check('folder dialog restores the default size on disable',
+        not (restored['dialog'].get('style') or '').strip() and
+        restored['dialog']['height'] >= 500, restored['dialog'])
     set_extension_enabled(True)
     wait_for_config(96, 2, 3)
+    reenabled = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == FOLDER_EFFECTIVE_ROWS and
+            state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+            state.get('dialog') and
+            state['dialog']['height'] < 500 and
+            folder_dialog_fits(state) and
+            state,
+        'folder dialog content fit after re-enable')
+    check_folder_dialog_fit(reenabled, 're-enabled')
     close_test_folder()
 
 

@@ -160,6 +160,31 @@ relayout. Ubuntu's adaptive layout derives spacing from `_iconSize`, so
 when the captured spacing is zero (folder grids may not be styled yet), it falls back to the
 grid's CSS theme spacing.
 
+Folder dialogs also shrink to their content instead of keeping Shell's fixed 720×720 panel
+(550 px on Ubuntu):
+
+- `computeFolderContentDimensions(itemCount, rows, columns)` uses only the rows and columns
+  that are in use while the items fit on one page: used columns are capped at the visible
+  item count and rows are `ceil(itemCount / usedColumns)`. Items that exceed the configured
+  capacity keep the full configured grid so paging and page indicators are unchanged.
+- `applyFolderDialogSize()` measures the largest item preferred size, reads
+  `page-padding-*` from the folder grid's theme node, measures the folder title's preferred
+  height and writes an inline `width`/`height` style on the dialog's `.app-folder-dialog`
+  box (`AppFolderDialog._viewBox`). The inline style overrides Shell's CSS size without
+  replacing the dialog's background, padding or shadow.
+- `_patchFolderOpen()` wraps each folder icon's `open()` method so the dialog is created and
+  sized before Shell calls `popup()`. A `notify::allocation` handler on every folder grid
+  schedules a post-layout pass, because label metrics and the title box are only final once
+  the dialog has been allocated. Both paths call `applyFolderDialogSize()`, which compares
+  the generated style and dimensions and queues a relayout only when something changed, so
+  the allocation/size feedback converges instead of looping.
+- The original inline style is saved in the `_originalFolderDialogs` WeakMap and restored
+  when the extension is disabled, a partial apply fails, or the folder grows beyond one
+  page. `_folderOpenOriginals` stores each icon's original `open()` method for restoration.
+- Click handlers are deliberately not used: Shell and the probe can call `open()` directly.
+  The folder preview information label mentions the shrink-to-fit behavior; the drawing
+  still shows the configured maximum grid.
+
 ### Application name visibility
 
 `show-app-names` controls labels below app, folder and folder-dialog icons.
@@ -290,8 +315,10 @@ enable()
   │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
-  │   ├─ _applyFolderLayouts()           — apply icon size/rows/columns/gaps to folder dialog grids
+  │   ├─ _applyFolderLayouts()           — apply content-aware rows/columns/gaps and dialog size
   │   ├─ _setupFolderEnforcers()         — defend folder spacing against adaptive style resets
+  │   ├─ _connectFolderSignals()         — apps-changed/destroy, patch open(), watch grid allocation
+  │   ├─ _patchFolderOpen(icon)          — create and size the dialog before Shell popups it
   │   ├─ _applyAppNameVisibility()       — show/hide labels in grid and folder dialogs
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
   │   ├─ restorePersistedPageOrder(...)   — first-run: rebuild order saved before Shell's 24-item split
@@ -305,6 +332,7 @@ enable()
 
 disable()
   ├─ _cancelScheduledApply()
+  ├─ _cancelFolderDialogSize()
   ├─ _disconnectOverview()
   ├─ _disconnectMonitorsChanged()
   ├─ _disconnectTheme()
@@ -320,6 +348,9 @@ _getControlsManager()  — Main.overview?._overview?._controls ?? null
 _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
 _applyFolderLayouts() / _restoreFolderLayouts() — apply or restore folder dialog grid layout
+_applyFolderDialogSize() / _applyFolderDialogSizes() — content-size existing folder dialogs
+_patchFolderOpen(icon) / _restoreFolderOpen(icon) — wrap or restore FolderIcon.open()
+_scheduleFolderDialogSize() / _cancelFolderDialogSize() — coalesce post-layout corrections
 _applyAppNameVisibility() / _restoreAppNameVisibility() — toggle icon labels
 _setupFolderEnforcers() / _disconnectFolderEnforcers() — defend folder spacing/limits
 ```
@@ -328,8 +359,10 @@ Original layout values are stored in `this._original` for the current layout man
 restored on disable or after a partial apply failure. The snapshot includes
 `effectiveIconSize` (`lm._iconSize`) for adaptive layouts without `_findBestIconSize()`.
 Folder grid originals are stored separately in `this._originalFolders`, keyed by layout
-manager. Label visibility originals live in `this._originalLabels`, and
-`_folderEnforcerIds` tracks the folder `notify::*` handlers.
+manager. Label visibility originals live in `this._originalLabels`; `_folderEnforcerIds`
+tracks the folder `notify::*` handlers, `_folderOpenOriginals` stores each folder icon's
+original `open()` method, and `_originalFolderDialogs` is a WeakMap of dialog style
+overrides.
 
 ---
 
@@ -540,10 +573,12 @@ restore capacity.
 
 The probe backs up and restores extension settings, `org.gnome.shell app-picker-layout`, and
 (when `TEST_FOLDER=1`) the temporary folder settings used for the 32 px/96 px folder-dialog
-checks, folder rows/columns/gaps, app-name visibility in the grid and folder, and the
-disable-restoration check. Acceptance is the probe exit status; a failing run
-copies the guest work directory and Shell log into `<cache>/logs/`, and the run overlay is
-still discarded unless `--keep-overlay` is used.
+checks, folder rows/columns/gaps, dialog content fit, app-name visibility in the grid and
+folder, folder paging/reflow, and the disable-restoration check. The paging check temporarily
+grows the folder to six apps, shrinks its capacity to 2×2, grows it back and restores the
+original app list. Acceptance is the probe exit status; a failing run copies the guest work
+directory and Shell log into `<cache>/logs/`, and the run overlay is still discarded unless
+`--keep-overlay` is used.
 
 Host requirements: x86_64 Linux, QEMU, OpenSSH client, curl, python3, `timeout`, and one of
 `cloud-localds`/`genisoimage`/`mkisofs`/`xorriso`. KVM is used when usable, TCG otherwise.
@@ -594,11 +629,11 @@ Restart the graphical session after installing a new build.
 |------|---------|
 | `config.js` | Shared presets, setting keys, fit and pixel-size calculations |
 | `gridPages.js` | Testable saved-order restoration, page overflow, and optional consolidation adapter |
-| `gridLayout.js` | Capability detection, dimension overrides, folder layout/name helpers, restoration for upstream and Ubuntu layouts |
+| `gridLayout.js` | Capability detection, dimension overrides, folder layout/dialog sizing/name helpers, restoration for upstream and Ubuntu layouts |
 | `snapshots.js` | Validation, ordering, cap and display labels for saved layout snapshots |
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, folder layout, names, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
-| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/names and snapshots |
+| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/dialog sizing/names/paging and snapshots |
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
 | `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
 | `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation assertions for both layouts |

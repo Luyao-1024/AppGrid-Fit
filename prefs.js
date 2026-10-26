@@ -903,7 +903,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             folderInfo.label =
                 `${folder.rows} × ${folder.columns} = ${capacity} apps per page · ` +
                 `gap ${folder.rowSpacing}×${folder.columnSpacing} px · ` +
-                `${folder.showNames ? 'labels shown' : 'labels hidden'}`;
+                `${folder.showNames ? 'labels shown' : 'labels hidden'} · ` +
+                'dialog shrinks to fit its contents';
             folderDa.queue_draw();
         };
         for (const key of [

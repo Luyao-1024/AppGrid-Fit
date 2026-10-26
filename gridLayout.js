@@ -2,6 +2,11 @@ const FIXED_DIMENSIONS = ['_fixedRows', '_fixedCols']
 const UNCONSTRAINED_SPACING = -1
 const ALIGN_START = 1
 const ALIGN_CENTER = 2
+const FOLDER_DIALOG_BORDER_FALLBACK = 1
+const FOLDER_DIALOG_TITLE_FALLBACK = 60
+const FOLDER_PAGE_PADDING_FALLBACK = {
+    top: 24, right: 18, bottom: 24, left: 18,
+}
 
 export function readThemeSpacing(node) {
     if (!node || typeof node.get_length !== 'function' ||
@@ -91,17 +96,307 @@ export function restoreGridLayout(grid, saved) {
     }
 }
 
-export function getFolderGrids(appDisplay) {
+function getFolderEntries(appDisplay) {
     const icons = appDisplay?._folderIcons
     if (!Array.isArray(icons))
         return []
-    const grids = []
+    const entries = []
+    const grids = new Set()
     for (const icon of icons) {
         const grid = icon?.view?._grid
-        if (grid?.layout_manager && !grids.includes(grid))
-            grids.push(grid)
+        if (grid?.layout_manager && !grids.has(grid)) {
+            grids.add(grid)
+            entries.push({icon, grid})
+        }
     }
-    return grids
+    return entries
+}
+
+export function getFolderGrids(appDisplay) {
+    return getFolderEntries(appDisplay).map(entry => entry.grid)
+}
+
+export function computeFolderContentDimensions(itemCount, rows, columns) {
+    const maxRows = Math.max(1, Math.trunc(rows) || 1)
+    const maxColumns = Math.max(1, Math.trunc(columns) || 1)
+    if (!Number.isInteger(itemCount) || itemCount <= 0)
+        return {rows: maxRows, columns: maxColumns, paged: false}
+    if (itemCount > maxRows * maxColumns)
+        return {rows: maxRows, columns: maxColumns, paged: true}
+    const usedColumns = Math.min(maxColumns, itemCount)
+    return {
+        rows: Math.ceil(itemCount / usedColumns),
+        columns: usedColumns,
+        paged: false,
+    }
+}
+
+export function computeFolderDialogSize({
+    rows,
+    columns,
+    cellSize,
+    rowSpacing,
+    columnSpacing,
+    pagePadding = FOLDER_PAGE_PADDING_FALLBACK,
+    titleHeight = FOLDER_DIALOG_TITLE_FALLBACK,
+    border = {
+        top: 0,
+        right: FOLDER_DIALOG_BORDER_FALLBACK,
+        bottom: 0,
+        left: FOLDER_DIALOG_BORDER_FALLBACK,
+    },
+}) {
+    const spacing = value => Math.max(0, Number(value) || 0)
+    return {
+        width: Math.ceil(columns * cellSize +
+            Math.max(0, columns - 1) * spacing(columnSpacing) +
+            pagePadding.left + pagePadding.right +
+            border.left + border.right),
+        height: Math.ceil(titleHeight +
+            rows * cellSize +
+            Math.max(0, rows - 1) * spacing(rowSpacing) +
+            pagePadding.top + pagePadding.bottom +
+            border.top + border.bottom),
+    }
+}
+
+function countFolderItems(grid) {
+    const pages = grid?.layout_manager?._pages
+    if (Array.isArray(pages))
+        return pages.reduce((count, page) =>
+            count + (page?.visibleChildren?.length ?? 0), 0)
+    let count = 0
+    try {
+        for (const item of grid) {
+            if (item?.visible)
+                count++
+        }
+    } catch (_error) {
+        return null
+    }
+    return count
+}
+
+function syncFolderIconSize(grid, lm, iconSize) {
+    if (!Number.isFinite(iconSize) || iconSize < 0)
+        return
+    lm._iconSize = iconSize
+    if (lm._container) {
+        for (const child of lm._container)
+            child?.icon?.setIconSize?.(iconSize)
+    }
+    if ('_childrenMaxSize' in lm)
+        lm._childrenMaxSize = -1
+}
+
+function measureFolderCellSize(grid, lm) {
+    let size = 0
+    const measure = actor => {
+        try {
+            const [width, height] = actor.get_preferred_size()
+            if (Number.isFinite(width) && Number.isFinite(height))
+                size = Math.max(size, width, height)
+        } catch (_error) {}
+    }
+    if (Array.isArray(lm._pages)) {
+        for (const page of lm._pages) {
+            for (const actor of page.visibleChildren ?? [])
+                measure(actor)
+        }
+    }
+    if (size <= 0) {
+        try {
+            for (const actor of grid) {
+                if (actor?.visible)
+                    measure(actor)
+            }
+        } catch (_error) {}
+    }
+    return size > 0 ? Math.ceil(size) : null
+}
+
+function folderPagePadding(grid, lm) {
+    const padding = lm?.page_padding
+    const sides = ['top', 'right', 'bottom', 'left']
+    const values = sides.map(side => padding?.[side])
+    if (values.every(Number.isFinite) && values.some(value => value > 0))
+        return padding
+    try {
+        if (grid?.get_stage?.()) {
+            const node = grid.get_theme_node()
+            return {
+                top: node.get_length('page-padding-top'),
+                right: node.get_length('page-padding-right'),
+                bottom: node.get_length('page-padding-bottom'),
+                left: node.get_length('page-padding-left'),
+            }
+        }
+    } catch (_error) {}
+    return FOLDER_PAGE_PADDING_FALLBACK
+}
+
+function folderDialogBorder(dialog) {
+    const fallback = {
+        top: 0,
+        right: FOLDER_DIALOG_BORDER_FALLBACK,
+        bottom: 0,
+        left: FOLDER_DIALOG_BORDER_FALLBACK,
+    }
+    try {
+        dialog?.ensure_style?.()
+        const node = dialog?._viewBox?.get_theme_node?.()
+        if (!node)
+            return fallback
+        const length = name => {
+            const value = node.get_length(name)
+            return Number.isFinite(value) ? value : FOLDER_DIALOG_BORDER_FALLBACK
+        }
+        return {
+            top: length('padding-top'),
+            right: length('padding-right'),
+            bottom: length('padding-bottom'),
+            left: length('padding-left'),
+        }
+    } catch (_error) {
+        return fallback
+    }
+}
+
+function measureFolderTitleHeight(dialog) {
+    try {
+        dialog?.ensure_style?.()
+        const [height] = dialog?._entryBox?.get_preferred_height(-1) ?? []
+        if (Number.isFinite(height) && height > 0)
+            return Math.ceil(height)
+    } catch (_error) {}
+    return FOLDER_DIALOG_TITLE_FALLBACK
+}
+
+function reflowFolderPages(grid) {
+    const lm = grid?.layout_manager
+    if (!lm || typeof lm._updatePages !== 'function')
+        return false
+    try {
+        lm._updatePages()
+        if (!lm.allowIncompletePages &&
+            typeof lm._fillItemVacancies === 'function' &&
+            Array.isArray(lm._pages)) {
+            for (let index = 0; index < lm._pages.length; index++)
+                lm._fillItemVacancies(index)
+        }
+        return true
+    } catch (_error) {
+        return false
+    }
+}
+
+function applyFolderDimensions(grid, dims) {
+    const lm = grid?.layout_manager
+    if (!lm || !getGridLayoutMode(grid))
+        return false
+    if (lm.rows_per_page === dims.rows &&
+        lm.columns_per_page === dims.columns)
+        return false
+    setGridDimensions(grid, dims.rows, dims.columns)
+    reflowFolderPages(grid)
+    return true
+}
+
+function folderDialogContentSize(dialog, grid, lm, dims, config) {
+    const cellSize = measureFolderCellSize(grid, lm)
+    if (!cellSize)
+        return null
+    return computeFolderDialogSize({
+        rows: dims.rows,
+        columns: dims.columns,
+        cellSize,
+        rowSpacing: config.rowSpacing,
+        columnSpacing: config.columnSpacing,
+        pagePadding: folderPagePadding(grid, lm),
+        titleHeight: measureFolderTitleHeight(dialog),
+        border: folderDialogBorder(dialog),
+    })
+}
+
+function restoreFolderDialogSize(box, originals) {
+    if (!box || !originals?.has(box))
+        return false
+    const original = originals.get(box)
+    originals.delete(box)
+    box.set_style?.(original?.style ?? '')
+    if (Number.isFinite(original?.width) && Number.isFinite(original?.height)) {
+        box.width = original.width
+        box.height = original.height
+    }
+    box.queue_relayout?.()
+    return true
+}
+
+export function applyFolderDialogSize(icon, config, originals = null) {
+    const grid = icon?.view?._grid
+    const lm = grid?.layout_manager
+    if (!lm || !('fixed_icon_size' in lm))
+        return null
+
+    const itemCount = countFolderItems(grid)
+    const dims = computeFolderContentDimensions(itemCount, config.rows,
+        config.columns)
+    let changed = applyFolderDimensions(grid, dims)
+    syncFolderIconSize(grid, lm, config.iconSize)
+
+    const dialog = icon?._dialog
+    const box = dialog?._viewBox
+    if (box) {
+        const size = dims.paged
+            ? null
+            : folderDialogContentSize(dialog, grid, lm, dims, config)
+        if (size) {
+            if (originals && !originals.has(box)) {
+                // Ubuntu's adaptive layout pins the panel to a fixed size,
+                // which only the actor dimensions can override.
+                const fixed = getGridLayoutMode(grid) === 'adaptive' &&
+                    box.width > 0 && box.height > 0
+                originals.set(box, {
+                    style: box.get_style?.() ?? '',
+                    width: fixed ? box.width : null,
+                    height: fixed ? box.height : null,
+                })
+            }
+            const original = originals?.get(box)
+            const baseStyle = (original?.style ?? '').trim()
+            const style = `${baseStyle ? `${baseStyle} ` : ''}` +
+                `width: ${size.width}px; height: ${size.height}px;`
+            const fixed = Number.isFinite(original?.width) &&
+                Number.isFinite(original?.height)
+            if (box.get_style?.() !== style ||
+                (fixed && (box.width !== size.width ||
+                    box.height !== size.height))) {
+                box.set_style(style)
+                if (fixed) {
+                    box.width = size.width
+                    box.height = size.height
+                }
+                box.queue_relayout?.()
+                changed = true
+            }
+        } else if (restoreFolderDialogSize(box, originals)) {
+            changed = true
+        }
+    }
+
+    if (changed) {
+        lm._pageWidth = 0
+        lm._pageHeight = 0
+        grid.queue_relayout()
+    }
+    return dims
+}
+
+export function applyFolderDialogSizes(appDisplay, config, originals = null) {
+    for (const {icon} of getFolderEntries(appDisplay)) {
+        if (icon?._dialog)
+            applyFolderDialogSize(icon, config, originals)
+    }
 }
 
 export function getIconLabels(appDisplay) {
@@ -180,27 +475,33 @@ function applyFolderAlignment(lm) {
         lm.page_halign = ALIGN_CENTER
 }
 
-export function applyFolderLayouts(appDisplay, config, originals) {
-    for (const grid of getFolderGrids(appDisplay)) {
+export function applyFolderLayouts(appDisplay, config, originals,
+    dialogOriginals = null) {
+    for (const {icon, grid} of getFolderEntries(appDisplay)) {
         const lm = grid.layout_manager
         if (!('fixed_icon_size' in lm))
             continue
         if (!originals.has(lm))
             originals.set(lm, saveFolderState(grid))
-        if (getGridLayoutMode(grid))
-            setGridDimensions(grid, config.rows, config.columns)
+        const dims = computeFolderContentDimensions(countFolderItems(grid),
+            config.rows, config.columns)
+        applyFolderDimensions(grid, dims)
         lm.fixed_icon_size = config.iconSize
         lm.row_spacing = config.rowSpacing
         lm.column_spacing = config.columnSpacing
         applyFolderAlignment(lm)
+        syncFolderIconSize(grid, lm, config.iconSize)
+        if (icon?._dialog)
+            applyFolderDialogSize(icon, config, dialogOriginals)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()
     }
 }
 
-export function restoreFolderLayouts(appDisplay, originals) {
-    for (const grid of getFolderGrids(appDisplay)) {
+export function restoreFolderLayouts(appDisplay, originals,
+    dialogOriginals = null) {
+    for (const {icon, grid} of getFolderEntries(appDisplay)) {
         const lm = grid.layout_manager
         const original = originals.get(lm)
         if (!original)
@@ -216,6 +517,7 @@ export function restoreFolderLayouts(appDisplay, originals) {
         }
         if (original.layout)
             restoreGridLayout(grid, original.layout)
+        restoreFolderDialogSize(icon?._dialog?._viewBox, dialogOriginals)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()
