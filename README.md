@@ -23,6 +23,8 @@ Current version: **1.3.4**
 
 ## Screenshots
 
+The screenshots show the Simplified Chinese interface; the UI follows the system locale.
+
 **App Grid — Large Icons**
 
 ![Large Icons](images/large_icon.png)
@@ -31,13 +33,21 @@ Current version: **1.3.4**
 
 ![Medium](images/medium.png)
 
-**Preferences — Preset Mode**
+**Preferences — Root menu with a live overview preview**
 
-![Preset mode with a live App Grid preview](images/preset-mode-preview.png)
+![Preferences root menu](images/preferences-root.png)
 
-**Preferences — Custom Mode**
+**Preferences — App grid**
 
-![Custom mode with independent grid controls and a live preview](images/custom-mode-preview.png)
+![App grid settings with a live preview](images/preferences-app-grid.png)
+
+**Preferences — Folder dialog**
+
+![Folder dialog settings with a dedicated preview](images/preferences-folder-dialog.png)
+
+**Folder dialog — configured 3×3 grid**
+
+![Folder dialog with a configured 3x3 grid](images/folder-dialog.png)
 
 ## Presets
 
