@@ -44,6 +44,16 @@ const ENFORCED_PROPERTIES = [
 
 const SETTLE_PUBLISH_DELAY_MS = 600
 
+function createFolderPagePadding() {
+    const padding = FOLDER_DIALOG_PAGE_PADDING
+    return new Clutter.Margin({
+        top: padding,
+        right: padding,
+        bottom: padding,
+        left: padding,
+    })
+}
+
 export default class AppGridSizeExtension extends Extension {
     enable() {
         this._resetState()
@@ -92,7 +102,6 @@ export default class AppGridSizeExtension extends Extension {
         this._originalFolders = new Map()
         this._originalFolderDialogs = new WeakMap()
         this._originalLabels = new Map()
-        this._folderPagePadding = null
         this._folderEnforcerIds = new Map()
         this._folderSignalIds = new Map()
         this._folderOpenOriginals = new Map()
@@ -629,22 +638,13 @@ export default class AppGridSizeExtension extends Extension {
 
     _folderDialogConfig() {
         const config = this._activeConfig
-        if (!this._folderPagePadding) {
-            const padding = FOLDER_DIALOG_PAGE_PADDING
-            this._folderPagePadding = new Clutter.Margin({
-                top: padding,
-                right: padding,
-                bottom: padding,
-                left: padding,
-            })
-        }
         return {
             iconSize: config.iconSize,
             rows: config.folderRows,
             columns: config.folderColumns,
             rowSpacing: config.folderRowSpacing,
             columnSpacing: config.folderColumnSpacing,
-            pagePadding: this._folderPagePadding,
+            pagePadding: createFolderPagePadding(),
         }
     }
 
