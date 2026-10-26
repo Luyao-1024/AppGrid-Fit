@@ -2,10 +2,10 @@ import {FOLDER_DIALOG_PAGE_PADDING} from './config.js'
 
 const FIXED_DIMENSIONS = ['_fixedRows', '_fixedCols']
 const UNCONSTRAINED_SPACING = -1
-const ALIGN_START = 1
 const ALIGN_CENTER = 2
 const FOLDER_DIALOG_BORDER_FALLBACK = 1
 const FOLDER_DIALOG_TITLE_FALLBACK = 60
+const FOLDER_DIALOG_PAGING_FALLBACK = 40
 const FOLDER_TITLE_SIDE_INSET_FALLBACK = 36
 const FOLDER_TITLE_BUTTON_FALLBACK = 40
 const FOLDER_TITLE_FONT_FALLBACK = 26.666
@@ -145,6 +145,7 @@ export function computeFolderDialogSize({
     columnSpacing,
     pagePadding = FOLDER_PAGE_PADDING_FALLBACK,
     titleHeight = FOLDER_DIALOG_TITLE_FALLBACK,
+    extraHeight = 0,
     border = {
         top: 0,
         right: FOLDER_DIALOG_BORDER_FALLBACK,
@@ -162,7 +163,8 @@ export function computeFolderDialogSize({
             rows * cellSize +
             Math.max(0, rows - 1) * spacing(rowSpacing) +
             pagePadding.top + pagePadding.bottom +
-            border.top + border.bottom),
+            border.top + border.bottom +
+            spacing(extraHeight)),
     }
 }
 
@@ -252,11 +254,59 @@ function sameMargin(first, second) {
         Number(first[side]) === Number(second[side]))
 }
 
+const PADDING_SIDES = ['top', 'right', 'bottom', 'left']
+
+function folderPadding(padding) {
+    return Object.fromEntries(PADDING_SIDES.map(side =>
+        [side, Math.max(0, Math.round(Number(padding?.[side]) || 0))]))
+}
+
+function copyPadding(padding, values) {
+    const result = typeof padding?.copy === 'function'
+        ? padding.copy()
+        : {...values}
+    for (const side of PADDING_SIDES)
+        result[side] = values[side]
+    return result
+}
+
+export function computeFolderPagePadding(padding, paged, current = null) {
+    const desired = folderPadding(padding)
+    if (!paged)
+        return desired
+    // Shell places navigation arrows inside the side page padding. Keep that
+    // strip on paged folders, but let a larger configured edge win.
+    const currentPadding = folderPadding(current)
+    return {
+        top: desired.top,
+        right: Math.max(desired.right, currentPadding.right),
+        bottom: desired.bottom,
+        left: Math.max(desired.left, currentPadding.left),
+    }
+}
+
+function folderItemCount(lm) {
+    if (!Array.isArray(lm?._pages))
+        return null
+    return lm._pages.reduce((count, page) =>
+        count + (page?.visibleChildren?.length ?? 0), 0)
+}
+
+function folderIsPaged(lm) {
+    const itemCount = folderItemCount(lm)
+    const capacity = (lm?.rows_per_page ?? 0) * (lm?.columns_per_page ?? 0)
+    if (itemCount === null || capacity <= 0)
+        return null
+    return itemCount > capacity
+}
+
 function applyFolderPagePadding(lm, paged, config) {
-    if (paged || !hasPagePadding(lm))
+    if (!config.pagePadding || !hasPagePadding(lm))
         return false
-    const desired = config.pagePadding
-    if (!desired || sameMargin(lm.page_padding, desired))
+    const desired = copyPadding(config.pagePadding,
+        computeFolderPagePadding(
+            config.pagePadding, paged, lm.page_padding))
+    if (sameMargin(lm.page_padding, desired))
         return false
     lm.page_padding = desired
     return true
@@ -264,17 +314,17 @@ function applyFolderPagePadding(lm, paged, config) {
 
 // Shell recomputes folder page padding from the navigation-arrow width on
 // every allocation, which leaves wide side margins on single-page folders.
-export function enforceFolderPagePadding(lm, padding) {
-    if (!lm || !padding || !hasPagePadding(lm) ||
-        !Array.isArray(lm._pages))
+export function enforceFolderPagePadding(lm, padding, paged = null) {
+    if (!lm || !padding || !hasPagePadding(lm))
         return false
-    const itemCount = lm._pages.reduce((count, page) =>
-        count + (page?.visibleChildren?.length ?? 0), 0)
-    const capacity = (lm.rows_per_page ?? 0) * (lm.columns_per_page ?? 0)
-    if (capacity <= 0 || itemCount > capacity ||
-        sameMargin(lm.page_padding, padding))
+    const isPaged = paged ?? folderIsPaged(lm)
+    if (isPaged === null)
         return false
-    lm.page_padding = padding
+    const desired = copyPadding(padding,
+        computeFolderPagePadding(padding, isPaged, lm.page_padding))
+    if (sameMargin(lm.page_padding, desired))
+        return false
+    lm.page_padding = desired
     return true
 }
 
@@ -314,6 +364,24 @@ function measureFolderTitleHeight(dialog) {
             return Math.ceil(height)
     } catch (_error) {}
     return FOLDER_DIALOG_TITLE_FALLBACK
+}
+
+function measureFolderPagingHeight(dialog) {
+    try {
+        dialog?._view?._pageIndicators?.ensure_style?.()
+        const [, natural] = dialog?._view?._pageIndicators
+            ?.get_preferred_height(-1) ?? []
+        if (Number.isFinite(natural) && natural > 0)
+            return Math.ceil(natural)
+    } catch (_error) {}
+    try {
+        const view = dialog?._view
+        const scroll = view?._box?.get_first_child?.()
+        if (Number.isFinite(view?.height) && Number.isFinite(scroll?.height) &&
+            view.height > scroll.height)
+            return Math.ceil(view.height - scroll.height)
+    } catch (_error) {}
+    return FOLDER_DIALOG_PAGING_FALLBACK
 }
 
 function readActorFontSize(actor) {
@@ -423,19 +491,25 @@ function folderDialogContentSize(dialog, grid, lm, dims, config) {
     if (!cellSize)
         return null
     const border = folderDialogBorder(dialog)
+    const paged = dims.paged
+    const pagePadding = config.pagePadding
+        ? computeFolderPagePadding(
+            config.pagePadding, paged, lm.page_padding)
+        : folderPagePadding(grid, lm)
     const size = computeFolderDialogSize({
         rows: dims.rows,
         columns: dims.columns,
         cellSize,
         rowSpacing: config.rowSpacing,
         columnSpacing: config.columnSpacing,
-        pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
+        pagePadding,
         titleHeight: measureFolderTitleHeight(dialog),
+        extraHeight: paged ? measureFolderPagingHeight(dialog) : 0,
         border,
     })
-    // The title bar only adds height, so square grids would otherwise get a
-    // taller-than-wide panel. Match the width to make the background square.
-    if (dims.rows === dims.columns && size.width < size.height)
+    // The title bar only adds height, so single-page square grids would
+    // otherwise get a taller-than-wide panel.
+    if (!paged && dims.rows === dims.columns && size.width < size.height)
         size.width = size.height
     return {...size, border}
 }
@@ -500,29 +574,24 @@ export function applyFolderDialogSize(icon, config, originals = null,
     const dialog = icon?._dialog
     const box = dialog?._viewBox
     if (box) {
-        let size = null
-        if (!dims.paged) {
-            if (originals && !originals.has(box)) {
-                // Ubuntu's adaptive layout pins the panel to a fixed size,
-                // which only the actor dimensions can override.
-                const fixed = getGridLayoutMode(grid) === 'adaptive' &&
-                    box.width > 0 && box.height > 0
-                originals.set(box, {
-                    style: box.get_style?.() ?? '',
-                    width: fixed ? box.width : null,
-                    height: fixed ? box.height : null,
-                    entry: dialog?._entry ?? null,
-                    title: folderDialogTitleState(dialog),
-                })
-            }
-            const titleOriginal = originals?.get(box)
-            if (titleOriginal &&
-                applyFolderDialogTitle(titleOriginal, config.titleSize))
-                changed = true
-            size = folderDialogContentSize(dialog, grid, lm, dims, config)
+        if (originals && !originals.has(box)) {
+            // Ubuntu's adaptive layout pins the panel to a fixed size,
+            // which only the actor dimensions can override.
+            const fixed = getGridLayoutMode(grid) === 'adaptive' &&
+                box.width > 0 && box.height > 0
+            originals.set(box, {
+                style: box.get_style?.() ?? '',
+                width: fixed ? box.width : null,
+                height: fixed ? box.height : null,
+                entry: dialog?._entry ?? null,
+                title: folderDialogTitleState(dialog),
+            })
         }
+        const original = originals?.get(box)
+        if (original && applyFolderDialogTitle(original, config.titleSize))
+            changed = true
+        const size = folderDialogContentSize(dialog, grid, lm, dims, config)
         if (size) {
-            const original = originals?.get(box)
             const baseStyle = (original?.style ?? '').trim()
             const style = `${baseStyle ? `${baseStyle} ` : ''}` +
                 `width: ${size.width}px; height: ${size.height}px;`
@@ -645,7 +714,9 @@ function applyFolderAlignment(lm) {
     if ('max_column_spacing' in lm)
         lm.max_column_spacing = UNCONSTRAINED_SPACING
     if ('page_valign' in lm)
-        lm.page_valign = ALIGN_START
+        // Center the grid block so leftover space splits above and below the
+        // rows instead of collecting all of it at the bottom.
+        lm.page_valign = ALIGN_CENTER
     if ('page_halign' in lm)
         lm.page_halign = ALIGN_CENTER
 }

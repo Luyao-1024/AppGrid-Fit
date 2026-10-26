@@ -3,14 +3,17 @@ import test from 'node:test'
 
 import {
     DEFAULT_PAGE_CAPACITY,
+    FOLDER_EDGE_PADDING_MAX,
     PRESETS,
     PRESET_WIDTH_RATIO,
     SETTINGS_KEYS,
+    autoFolderEdgePadding,
     computePreviewColorIndex,
     computeGridFit,
     computeGridPixelSize,
     computePreviewTileSize,
     decodePreviewLayout,
+    resolveFolderEdgePadding,
     resolvePreviewPages,
     splitPageItemCounts,
     splitPageItems,
@@ -137,6 +140,31 @@ test('preview pages follow consolidated Shell boundaries', () => {
 
 test('all settings keys are unique', () => {
     assert.equal(new Set(SETTINGS_KEYS).size, SETTINGS_KEYS.length)
+    assert.ok(SETTINGS_KEYS.includes('folder-edge-padding-auto'))
+    assert.ok(SETTINGS_KEYS.includes('folder-edge-padding'))
+})
+
+test('automatic folder edge padding follows the icon size', () => {
+    assert.equal(autoFolderEdgePadding(160), 24)
+    assert.equal(autoFolderEdgePadding(96), 24)
+    assert.equal(autoFolderEdgePadding(64), 16)
+    assert.equal(autoFolderEdgePadding(48), 12)
+    assert.equal(autoFolderEdgePadding(32), 12)
+    assert.equal(autoFolderEdgePadding(16), 12)
+    assert.equal(autoFolderEdgePadding(0), 12)
+    assert.equal(autoFolderEdgePadding(-10), 12)
+    assert.equal(autoFolderEdgePadding(Number.NaN), 12)
+    assert.equal(autoFolderEdgePadding(undefined), 12)
+})
+
+test('manual folder edge padding overrides the automatic value', () => {
+    assert.equal(resolveFolderEdgePadding(32, true, 80), 12)
+    assert.equal(resolveFolderEdgePadding(96, true, 0), 24)
+    assert.equal(resolveFolderEdgePadding(96, false, 0), 0)
+    assert.equal(resolveFolderEdgePadding(96, false, 37), 37)
+    assert.equal(resolveFolderEdgePadding(96, false, -5), 0)
+    assert.equal(resolveFolderEdgePadding(96, false, 500),
+        FOLDER_EDGE_PADDING_MAX)
 })
 
 test('runtime preview layout decoding rejects incomplete state', () => {

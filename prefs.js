@@ -8,6 +8,7 @@ import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Ex
 import {
     DEFAULT_PAGE_CAPACITY,
     FOLDER_DIALOG_PAGE_PADDING,
+    FOLDER_EDGE_PADDING_MAX,
     FOLDER_MAX_DIMENSION,
     FOLDER_MAX_SPACING,
     FOLDER_MAX_TITLE_SIZE,
@@ -17,12 +18,14 @@ import {
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
     SNAPSHOT_SETTINGS_KEYS,
+    autoFolderEdgePadding,
     computePreviewColorIndex,
     computeGridFit,
     computeGridPixelSize,
     computePreviewTileSize,
     decodePreviewLayout,
     readFolderConfig,
+    resolveFolderEdgePadding,
     resolvePreviewPages,
 } from './config.js';
 import {
@@ -355,7 +358,9 @@ function drawFolderPreviewSection(cr, x, y, w, h, config) {
     } = config;
     const rows = Math.max(1, folderRows);
     const columns = Math.max(1, folderColumns);
-    const panelPad = FOLDER_DIALOG_PAGE_PADDING;
+    const panelPad = Number.isFinite(config.folderEdgePadding)
+        ? Math.max(0, Math.round(config.folderEdgePadding))
+        : FOLDER_DIALOG_PAGE_PADDING;
     const titleH = folderTitleSize > 0
         ? Math.round(folderTitleSize * 1.24 + 18)
         : 51;
@@ -513,20 +518,30 @@ function createSpinRow(settings, key, title,
     return row;
 }
 
+function readIconSize(settings) {
+    return settings.get_boolean('use-presets')
+        ? PRESETS[settings.get_int('preset-level')].iconSize
+        : settings.get_int('custom-icon-size');
+}
+
 function readGridConfig(settings) {
     const folder = readFolderConfig(settings);
+    const iconSize = readIconSize(settings);
     const folderConfig = {
         folderRows: folder.rows,
         folderColumns: folder.columns,
         folderRowSpacing: folder.rowSpacing,
         folderColumnSpacing: folder.columnSpacing,
         folderTitleSize: folder.titleSize,
+        folderEdgePaddingAuto: folder.edgePaddingAuto,
+        folderEdgePadding: resolveFolderEdgePadding(iconSize,
+            folder.edgePaddingAuto, folder.edgePadding),
         showNames: folder.showNames,
     };
     if (settings.get_boolean('use-presets')) {
         const preset = PRESETS[settings.get_int('preset-level')];
         return {
-            iconSize: preset.iconSize,
+            iconSize,
             rows: preset.rows,
             columns: preset.columns,
             rowGap: preset.gap,
@@ -536,7 +551,7 @@ function readGridConfig(settings) {
         };
     }
     return {
-        iconSize: settings.get_int('custom-icon-size'),
+        iconSize,
         rows: settings.get_int('custom-rows'),
         columns: settings.get_int('custom-columns'),
         rowGap: settings.get_int('custom-row-spacing'),
@@ -909,6 +924,60 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 lower: 0, upper: FOLDER_MAX_TITLE_SIZE, step: 1, page: 4,
                 subtitle: _('0 follows the system theme; the edit button scales with the title'),
             }));
+        const edgeAutoRow = new Adw.SwitchRow({
+            title: _('Automatic edge padding'),
+            subtitle: '',
+        });
+        settings.bind('folder-edge-padding-auto', edgeAutoRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        folderGroup.add(edgeAutoRow);
+        const edgePaddingRow = createSpinRow(settings, 'folder-edge-padding',
+            _('Edge padding (px)'), {
+                lower: 0, upper: FOLDER_EDGE_PADDING_MAX, step: 2, page: 8,
+                subtitle: _('Used when automatic edge padding is off'),
+            });
+        folderGroup.add(edgePaddingRow);
+        const syncEdgePaddingRows = () => {
+            const auto = settings.get_boolean('folder-edge-padding-auto');
+            const iconSize = readIconSize(settings);
+            const effective = resolveFolderEdgePadding(iconSize, auto,
+                settings.get_int('folder-edge-padding'));
+            edgePaddingRow.sensitive = !auto;
+            edgeAutoRow.subtitle = auto
+                ? formatMessage(
+                    _('Follows the icon size: {padding} px'),
+                    {padding: effective})
+                : _('Using the manual edge padding below');
+            edgePaddingRow.subtitle = auto
+                ? formatMessage(
+                    _('Manual value {padding} px; used when automatic is off'),
+                    {padding: settings.get_int('folder-edge-padding')})
+                : _('Distance from the grid to the panel edge');
+        };
+        let previousEdgeAuto = settings.get_boolean(
+            'folder-edge-padding-auto');
+        connectSignal(cleanupFns, settings,
+            'changed::folder-edge-padding-auto', () => {
+                const auto = settings.get_boolean(
+                    'folder-edge-padding-auto');
+                if (previousEdgeAuto && !auto) {
+                    settings.set_int('folder-edge-padding',
+                        autoFolderEdgePadding(readIconSize(settings)));
+                }
+                previousEdgeAuto = auto;
+                syncEdgePaddingRows();
+            });
+        for (const key of [
+            'use-presets',
+            'preset-level',
+            'custom-icon-size',
+        ]) {
+            connectSignal(cleanupFns, settings, `changed::${key}`,
+                syncEdgePaddingRows);
+        }
+        connectSignal(cleanupFns, settings, 'changed::folder-edge-padding',
+            syncEdgePaddingRows);
+        syncEdgePaddingRows();
         const folderSpacingRow = new Adw.ExpanderRow({
             title: _('Spacing'),
             subtitle: _('Row and column gaps in pixels'),
@@ -940,20 +1009,24 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         folderBox.append(folderGroup);
 
         const updateFolderInfo = () => {
-            const folder = readFolderConfig(settings);
-            const capacity = folder.rows * folder.columns;
-            const title = folder.titleSize > 0
-                ? formatMessage(_('{size} px'), {size: folder.titleSize})
+            const config = readGridConfig(settings);
+            const capacity = config.folderRows * config.folderColumns;
+            const title = config.folderTitleSize > 0
+                ? formatMessage(_('{size} px'), {size: config.folderTitleSize})
                 : _('system');
+            const edgeMode = config.folderEdgePaddingAuto
+                ? _('auto') : _('manual');
             folderInfo.label = formatMessage(
-                _('{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · title {title} · {labels} · dialog fits the configured grid'), {
-                    rows: folder.rows,
-                    columns: folder.columns,
+                _('{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · edge {edge} px {edgeMode} · title {title} · {labels} · dialog fits the configured grid'), {
+                    rows: config.folderRows,
+                    columns: config.folderColumns,
                     capacity,
-                    rowGap: folder.rowSpacing,
-                    colGap: folder.columnSpacing,
+                    rowGap: config.folderRowSpacing,
+                    colGap: config.folderColumnSpacing,
+                    edge: config.folderEdgePadding,
+                    edgeMode,
                     title,
-                    labels: folder.showNames
+                    labels: config.showNames
                         ? _('labels shown') : _('labels hidden'),
                 });
         };
@@ -963,6 +1036,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             'folder-row-spacing',
             'folder-column-spacing',
             'folder-title-size',
+            'folder-edge-padding-auto',
+            'folder-edge-padding',
             'show-app-names',
             'use-presets',
             'preset-level',
@@ -1249,10 +1324,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     columns: config.columns,
                 });
             folderRow.subtitle = formatMessage(
-                _('{rows}×{columns} · title {title}'), {
+                _('{rows}×{columns} · title {title} · edge {edge} px'), {
                     rows: config.folderRows,
                     columns: config.folderColumns,
                     title: folderTitle,
+                    edge: config.folderEdgePadding,
                 });
             const saved = parseSnapshots(
                 settings.get_string('layout-snapshots')).length;
@@ -1265,6 +1341,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             'use-presets', 'preset-level', 'custom-icon-size',
             'custom-rows', 'custom-columns',
             'folder-rows', 'folder-columns', 'folder-title-size',
+            'folder-edge-padding-auto', 'folder-edge-padding',
             'layout-snapshots',
         ]) {
             connectSignal(cleanupFns, settings, `changed::${key}`,
@@ -1384,6 +1461,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 folderRowSpacing: config.folderRowSpacing,
                 folderColumnSpacing: config.folderColumnSpacing,
                 folderTitleSize: config.folderTitleSize,
+                folderEdgePadding: config.folderEdgePadding,
                 showNames: config.showNames,
             });
         });
@@ -1448,16 +1526,20 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     rows: config.folderRows,
                     columns: config.folderColumns,
                 });
+            const edgeMode = config.folderEdgePaddingAuto
+                ? _('auto') : _('manual');
             folderCaption.label = formatMessage(
-                _('{capacity} apps per page · gap {rowGap}×{colGap} px · {icon} px icons · title {title} · {labels}'), {
+                _('{capacity} apps per page · gap {rowGap}×{colGap} px · edge {edge} px {edgeMode} · {icon} px icons · title {title} · {labels}'), {
                     capacity,
                     rowGap: config.folderRowSpacing,
                     colGap: config.folderColumnSpacing,
+                    edge: config.folderEdgePadding,
+                    edgeMode,
                     icon: config.iconSize,
                     title,
                     labels: config.showNames
                         ? _('labels shown') : _('labels hidden'),
-                });
+                }) + '\n' + _('Paged folders keep side room for navigation arrows');
             folderDa.queue_draw();
         };
         updateFolderPreview();

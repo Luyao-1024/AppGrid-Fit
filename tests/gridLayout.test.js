@@ -5,6 +5,7 @@ import {
     applyFolderLayouts,
     computeFolderDialogSize,
     computeFolderGridDimensions,
+    computeFolderPagePadding,
     enforceFolderPagePadding,
     getFolderGrids,
     getGridLayoutMode,
@@ -239,7 +240,7 @@ test('folder grids follow the configured layout and restore', () => {
         assert.equal(grid.layout_manager.column_spacing, 14)
         assert.equal(grid.layout_manager.max_row_spacing, -1)
         assert.equal(grid.layout_manager.max_column_spacing, -1)
-        assert.equal(grid.layout_manager.page_valign, 1)
+        assert.equal(grid.layout_manager.page_valign, 2)
         assert.equal(grid.layout_manager.page_halign, 2)
         assert.deepEqual(grid.layout_manager.page_padding,
             {top: 24, right: 24, bottom: 24, left: 24})
@@ -430,6 +431,23 @@ test('folder dialog size follows cells, gaps, title and page padding', () => {
     })
 })
 
+test('paged folder dialog includes the paging strip height', () => {
+    assert.deepEqual(computeFolderDialogSize({
+        rows: 3,
+        columns: 3,
+        cellSize: 98,
+        rowSpacing: 12,
+        columnSpacing: 12,
+        pagePadding: {top: 24, right: 90, bottom: 24, left: 90},
+        titleHeight: 75,
+        extraHeight: 40,
+        border: {top: 0, right: 1, bottom: 0, left: 1},
+    }), {
+        width: 3 * 98 + 2 * 12 + 180 + 2,
+        height: 75 + 3 * 98 + 2 * 12 + 48 + 40,
+    })
+})
+
 test('folder dialogs fit the configured grid and restore', () => {
     const grid = contentFolderGrid(4, 100)
     const dialog = contentFolderDialog(80)
@@ -526,7 +544,7 @@ test('folder title size scales the title and edit button and restores', () => {
     assert.equal(dialogOriginals.size, 0)
 })
 
-test('paged folders keep the configured dialog grid and Shell padding', () => {
+test('paged folders keep Shell padding and fit the dialog around the grid', () => {
     const grid = contentFolderGrid(10, 100)
     const dialog = contentFolderDialog(80)
     const icon = {view: {_grid: grid}, _dialog: dialog}
@@ -546,8 +564,46 @@ test('paged folders keep the configured dialog grid and Shell padding', () => {
     assert.deepEqual(grid._gridModes, [{rows: 3, columns: 3}])
     assert.deepEqual(grid.layout_manager.page_padding,
         ORIGINAL_PAGE_PADDING)
+    assert.equal(dialog._viewBox.style, 'width: 486px; height: 484px;')
+    assert.equal(dialogOriginals.size, 1)
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style, '')
     assert.equal(dialogOriginals.size, 0)
+})
+
+test('paged folder dialogs follow the configured edge padding', () => {
+    const grid = contentFolderGrid(10, 100)
+    const dialog = contentFolderDialog(80)
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const base = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
+
+    applyFolderLayouts(appDisplay, {
+        ...base,
+        pagePadding: {top: 8, right: 8, bottom: 8, left: 8},
+    }, originals, dialogOriginals)
+    const lm = grid.layout_manager
+    assert.deepEqual(lm.page_padding,
+        {top: 8, right: 78, bottom: 8, left: 78})
+    assert.equal(dialog._viewBox.style, 'width: 486px; height: 452px;')
+    assert.equal(dialog._entry.width, 332)
+
+    applyFolderLayouts(appDisplay, {
+        ...base,
+        pagePadding: {top: 96, right: 96, bottom: 96, left: 96},
+    }, originals, dialogOriginals)
+    assert.deepEqual(lm.page_padding,
+        {top: 96, right: 96, bottom: 96, left: 96})
+    assert.equal(dialog._viewBox.style, 'width: 522px; height: 628px;')
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
 })
@@ -629,7 +685,25 @@ test('folder dimension changes reflow stale pages', () => {
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
 })
 
-test('folder page padding is only forced while one page is enough', () => {
+test('folder page padding keeps arrow strips on paged folders', () => {
+    const edge = {top: 12, right: 12, bottom: 12, left: 12}
+    const shell = {top: 36, right: 102, bottom: 36, left: 102}
+    assert.deepEqual(
+        computeFolderPagePadding(edge, false, shell),
+        edge)
+    assert.deepEqual(
+        computeFolderPagePadding(edge, true, shell),
+        {top: 12, right: 102, bottom: 12, left: 102})
+    assert.deepEqual(
+        computeFolderPagePadding({top: 96, right: 96, bottom: 96, left: 96},
+            true, {top: 36, right: 60, bottom: 36, left: 60}),
+        {top: 96, right: 96, bottom: 96, left: 96})
+    assert.deepEqual(
+        computeFolderPagePadding(edge, true, null),
+        edge)
+})
+
+test('folder page padding is forced on every page count', () => {
     const grid = folderGrid()
     const lm = grid.layout_manager
     const items = count => Array.from({length: count}, () => ({visible: true}))
@@ -639,13 +713,21 @@ test('folder page padding is only forced while one page is enough', () => {
     assert.deepEqual(lm.page_padding, PAGE_PADDING)
     assert.equal(enforceFolderPagePadding(lm, PAGE_PADDING), false)
 
-    lm.page_padding = {...ORIGINAL_PAGE_PADDING}
+    lm.page_padding = {top: 36, right: 78, bottom: 36, left: 78}
     lm._pages = [
         {visibleChildren: items(9)},
         {visibleChildren: items(1)},
     ]
+    assert.equal(enforceFolderPagePadding(lm, PAGE_PADDING), true)
+    assert.deepEqual(lm.page_padding,
+        {top: 24, right: 78, bottom: 24, left: 78})
     assert.equal(enforceFolderPagePadding(lm, PAGE_PADDING), false)
-    assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
+
+    lm.page_padding = {top: 36, right: 60, bottom: 36, left: 60}
+    assert.equal(enforceFolderPagePadding(lm,
+        {top: 40, right: 40, bottom: 40, left: 40}), true)
+    assert.deepEqual(lm.page_padding,
+        {top: 40, right: 60, bottom: 40, left: 60})
 
     lm._pages = null
     assert.equal(enforceFolderPagePadding(lm, PAGE_PADDING), false)
