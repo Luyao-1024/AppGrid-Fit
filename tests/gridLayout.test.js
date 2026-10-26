@@ -357,11 +357,15 @@ function contentFolderDialog(titleHeight = 80) {
         },
         queue_relayout() {},
     }
+    const ghost = {x: 36, width: 40}
     return {
         _viewBox: box,
         _entryBox: {
             get_preferred_height: () => [titleHeight, titleHeight],
+            get_first_child: () => ghost,
         },
+        _entry: {width: -1},
+        _editButton: {width: 40},
         ensure_style() {},
     }
 }
@@ -426,16 +430,19 @@ test('folder dialogs fit the configured grid and restore', () => {
     assert.deepEqual(lm.page_padding, PAGE_PADDING)
     assert.equal(dialog._viewBox.style,
         'width: 378px; height: 444px;')
+    assert.equal(dialog._entry.width, 224)
     assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
         style: '',
         width: null,
         height: null,
+        entry: dialog._entry,
     })
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style, '')
     assert.equal(dialog._viewBox.width, -1)
     assert.equal(dialog._viewBox.height, -1)
+    assert.equal(dialog._entry.width, -1)
     assert.equal(lm.rows_per_page, 3)
     assert.equal(lm.columns_per_page, 3)
     assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
@@ -487,6 +494,7 @@ test('paged folders leave Shell page padding untouched', () => {
     applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
     const lm = grid.layout_manager
     assert.deepEqual(lm.page_padding, PAGE_PADDING)
+    assert.equal(dialog._entry.width, 224)
 
     lm.page_padding = {top: 24, right: 60, bottom: 24, left: 60}
     lm._pages = [
@@ -496,6 +504,7 @@ test('paged folders leave Shell page padding untouched', () => {
     applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
     assert.deepEqual(lm.page_padding, {top: 24, right: 60, bottom: 24, left: 60})
     assert.equal(dialog._viewBox.style, '')
+    assert.equal(dialog._entry.width, -1)
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
@@ -592,15 +601,18 @@ test('fixed-size adaptive folder dialogs fit the configured grid and restore', (
         'width: 378px; height: 444px;')
     assert.equal(dialog._viewBox.width, 378)
     assert.equal(dialog._viewBox.height, 444)
+    assert.equal(dialog._entry.width, 224)
     assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
         style: '',
         width: 550,
         height: 550,
+        entry: dialog._entry,
     })
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style, '')
     assert.equal(dialog._viewBox.width, 550)
     assert.equal(dialog._viewBox.height, 550)
+    assert.equal(dialog._entry.width, -1)
     assert.equal(dialogOriginals.size, 0)
 })

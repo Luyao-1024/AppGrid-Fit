@@ -6,6 +6,8 @@ const ALIGN_START = 1
 const ALIGN_CENTER = 2
 const FOLDER_DIALOG_BORDER_FALLBACK = 1
 const FOLDER_DIALOG_TITLE_FALLBACK = 60
+const FOLDER_TITLE_SIDE_INSET_FALLBACK = 36
+const FOLDER_TITLE_BUTTON_FALLBACK = 40
 const FOLDER_PAGE_PADDING_FALLBACK = {
     top: FOLDER_DIALOG_PAGE_PADDING,
     right: FOLDER_DIALOG_PAGE_PADDING,
@@ -344,16 +346,44 @@ function folderDialogContentSize(dialog, grid, lm, dims, config) {
     const cellSize = measureFolderCellSize(grid, lm)
     if (!cellSize)
         return null
-    return computeFolderDialogSize({
-        rows: dims.rows,
-        columns: dims.columns,
-        cellSize,
-        rowSpacing: config.rowSpacing,
-        columnSpacing: config.columnSpacing,
-        pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
-        titleHeight: measureFolderTitleHeight(dialog),
-        border: folderDialogBorder(dialog),
-    })
+    const border = folderDialogBorder(dialog)
+    return {
+        ...computeFolderDialogSize({
+            rows: dims.rows,
+            columns: dims.columns,
+            cellSize,
+            rowSpacing: config.rowSpacing,
+            columnSpacing: config.columnSpacing,
+            pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
+            titleHeight: measureFolderTitleHeight(dialog),
+            border,
+        }),
+        border,
+    }
+}
+
+function fitFolderDialogTitle(dialog, size) {
+    const entry = dialog?._entry
+    const edit = dialog?._editButton
+    if (!entry || !edit)
+        return false
+    const ghost = dialog?._entryBox?.get_first_child?.()
+    const inset = Number.isFinite(ghost?.x) && ghost.x > 0
+        ? ghost.x
+        : FOLDER_TITLE_SIDE_INSET_FALLBACK
+    const editWidth = Number.isFinite(edit.width) && edit.width > 0
+        ? edit.width
+        : FOLDER_TITLE_BUTTON_FALLBACK
+    const ghostWidth = Number.isFinite(ghost?.width) && ghost.width > 0
+        ? ghost.width
+        : editWidth
+    const contentWidth = size.width - size.border.left - size.border.right
+    const width = Math.max(1, Math.round(contentWidth - inset * 2 -
+        editWidth - ghostWidth))
+    if (entry.width === width)
+        return false
+    entry.width = width
+    return true
 }
 
 function restoreFolderDialogSize(box, originals) {
@@ -366,6 +396,8 @@ function restoreFolderDialogSize(box, originals) {
         box.width = original.width
         box.height = original.height
     }
+    if (original?.entry)
+        original.entry.width = -1
     box.queue_relayout?.()
     return true
 }
@@ -402,6 +434,7 @@ export function applyFolderDialogSize(icon, config, originals = null,
                     style: box.get_style?.() ?? '',
                     width: fixed ? box.width : null,
                     height: fixed ? box.height : null,
+                    entry: dialog?._entry ?? null,
                 })
             }
             const original = originals?.get(box)
@@ -418,6 +451,10 @@ export function applyFolderDialogSize(icon, config, originals = null,
                     box.width = size.width
                     box.height = size.height
                 }
+                box.queue_relayout?.()
+                changed = true
+            }
+            if (originals?.has(box) && fitFolderDialogTitle(dialog, size)) {
                 box.queue_relayout?.()
                 changed = true
             }

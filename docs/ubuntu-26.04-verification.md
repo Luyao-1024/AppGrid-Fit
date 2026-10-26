@@ -49,23 +49,24 @@ pages. The cloud image uses the standard horizontal Dash; Ubuntu Dock is not ins
 Results on 2026-10-26 with QEMU 10.2.2/KVM, 2 vCPU, 4096 MiB, 1920×1080 virtual monitor and
 the extension built from this repository:
 
-- `ubuntu-24.04`: 86 checks passed.
-- `ubuntu-26.04`: 86 checks passed.
-- `fedora-44`: 86 checks passed.
-- `fedora-51`: 86 checks passed.
+- `ubuntu-24.04`: 87 checks passed.
+- `ubuntu-26.04`: 87 checks passed.
+- `fedora-44`: 87 checks passed.
+- `fedora-51`: 87 checks passed.
 
 The QEMU guest sets `TEST_FOLDER=1`. The probe creates a temporary folder from four dummy
 apps, opens it at 32 px and 96 px, and asserts that the folder dialog's child icons follow
 the configured size. It also verifies that the dialog keeps the configured 3×4 grid even
 though only four apps are present, that the panel width/height match the tile size, gaps and
 uniform 24 px page padding, that measured side margins are balanced instead of using Shell's
-wide navigation-arrow padding, that the panel shrinks when labels are hidden and grows back
-when they are shown, and that disabling the extension restores Shell's default panel size and
-padding. Folder settings are backed up and restored; legacy harnesses leave `TEST_FOLDER`
-unset and never touch folder settings.
+wide navigation-arrow padding, that the folder name and edit button stay inside the centered
+title bar, that the panel shrinks when labels are hidden and grows back when they are shown,
+and that disabling the extension restores Shell's default panel size and padding. Folder
+settings are backed up and restored; legacy harnesses leave `TEST_FOLDER` unset and never
+touch folder settings.
 
-The headless runs have 86 checks: the standard horizontal Dash emits two geometry checks
-instead of the live VM's three, and the QEMU guest adds twenty-three folder/name/dialog-fit
+The headless runs have 87 checks: the standard horizontal Dash emits two geometry checks
+instead of the live VM's three, and the QEMU guest adds twenty-four folder/name/dialog-fit
 checks. The legacy live VM runs 64 checks and the legacy Fedora headless harness runs 63
 because they do not enable `TEST_FOLDER`.
 
@@ -141,6 +142,7 @@ human inspection.
 | Folder layout | Folder dialog child icons follow 32 px and 96 px; a four-app folder keeps the configured 3×4 grid; gaps 8/14 px |
 | Folder dialog fit | Panel width/height match tiles, gaps and 24 px page padding at both icon sizes, shrink when labels are hidden and return when shown |
 | Folder margins | Folder page padding is 24 px on every side and the measured left/right icon margins are balanced |
+| Folder title | The folder name and edit button stay inside the panel, and the name is centered |
 | Folder paging | Six apps keep the 3×4 grid on one page, and a 2×2 grid reflows them into two pages; the panel returns to Shell's default size and padding while paged |
 | App names | `show-app-names=false` hides labels in the main grid and folder dialog, and restores them when re-enabled |
 | Folder disable | Restores adaptive icon size, 3×3 dimensions, Shell's native symmetric spacing, page padding and the default panel size |

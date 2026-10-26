@@ -9,7 +9,7 @@ Current version: **1.3.4**
 - **4 preset levels**: Large (96px), Medium (64px), Small (48px), Tiny (32px)
 - **Balanced fit**: Presets calculate rows/columns from your screen and Shell's full app-tile size while using 80% of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
-- **Configurable folder dialogs**: Choose the folder dialog's icon size, rows, columns and gaps, with a dedicated preview in the preferences window; child icons, labels and spacing follow the same settings, the dialog always keeps the configured grid area (a 3×3 folder shows 3×3 even with fewer apps), and the panel fits that grid with balanced 24 px side margins instead of leaving a wide empty border
+- **Configurable folder dialogs**: Choose the folder dialog's icon size, rows, columns and gaps, with a dedicated preview in the preferences window; child icons, labels and spacing follow the same settings, the dialog always keeps the configured grid area (a 3×3 folder shows 3×3 even with fewer apps), and the panel fits that grid with balanced 24 px side margins while keeping the folder name and edit button inside and centered
 - **Show or hide application names**: Toggles labels under apps and folders in both the App Grid and folder dialogs, and the preview reflects the choice
 - **Layout snapshots**: Save the current grid, app order, folder contents and visibility settings as a named snapshot, keep up to 20, and restore any of them after confirming the replacement
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled

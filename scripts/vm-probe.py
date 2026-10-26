@@ -330,10 +330,10 @@ for (const item of items) {{
         cellSize = Math.max(cellSize, width, height);
     }} catch (error) {{}}
 }}
-const itemRects = items.map(item => {{
+const actorRect = actor => {{
     try {{
-        const [x, y] = item.get_transformed_position();
-        const [width, height] = item.get_transformed_size();
+        const [x, y] = actor.get_transformed_position();
+        const [width, height] = actor.get_transformed_size();
         return {{
             x: Math.round(x),
             y: Math.round(y),
@@ -343,7 +343,8 @@ const itemRects = items.map(item => {{
     }} catch (error) {{
         return null;
     }}
-}});
+}};
+const itemRects = items.map(actorRect);
 let boxPosition = [0, 0];
 try {{
     if (box)
@@ -377,6 +378,10 @@ JSON.stringify({{
         height: Math.round(box.height),
         style: box.get_style(),
         titleHeight: Math.round(dialog._entryBox?.height ?? 0),
+    }} : null,
+    title: dialog ? {{
+        label: actorRect(dialog._folderNameLabel),
+        edit: actorRect(dialog._editButton),
     }} : null,
     itemRects,
     folderTileLabel: folder?.icon?.label?.visible ?? null,
@@ -526,6 +531,29 @@ def folder_margins_balanced(state):
         abs(margins['left'] - margins['right']) <= 4)
 
 
+def folder_title_inside(state):
+    dialog = state.get('dialog') or {}
+    title = state.get('title') or {}
+    label = title.get('label') or {}
+    edit = title.get('edit') or {}
+    values = [
+        dialog.get('x'), dialog.get('width'),
+        label.get('x'), label.get('width'),
+        edit.get('x'), edit.get('width'),
+    ]
+    if any(not isinstance(value, (int, float)) for value in values):
+        return False
+    left = dialog['x']
+    right = dialog['x'] + dialog['width']
+    center = dialog['x'] + dialog['width'] / 2
+    label_center = label['x'] + label['width'] / 2
+    return (label['x'] >= left and
+        label['x'] + label['width'] <= right and
+        edit['x'] >= left and
+        edit['x'] + edit['width'] <= right and
+        abs(label_center - center) <= 4)
+
+
 def check_folder_icon_sizes():
     gs_set('folder-rows', FOLDER_ROWS)
     gs_set('folder-columns', FOLDER_COLUMNS)
@@ -553,6 +581,7 @@ def check_folder_icon_sizes():
                     state['dialog']['height'] > 0 and
                     folder_dialog_fits(state) and
                     folder_margins_balanced(state) and
+                    folder_title_inside(state) and
                     state,
                 f'folder grid at {size}px')
         except RuntimeError as error:
@@ -578,6 +607,9 @@ def check_folder_icon_sizes():
     margins = folder_horizontal_margins(state)
     check('folder dialog side margins are balanced',
         folder_margins_balanced(state), margins)
+    check('folder title and edit button stay inside and centered',
+        folder_title_inside(state),
+        {'title': state.get('title'), 'dialog': state.get('dialog')})
     check('folder dialog height follows the icon size',
         dialog_heights[32] < dialog_heights[96], dialog_heights)
 

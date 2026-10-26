@@ -63,6 +63,8 @@ calculations used by both runtime and preferences code.
 | `FOLDER_MAX_DIMENSION` | `6` | Maximum folder dialog rows/columns |
 | `FOLDER_MAX_SPACING` | `64` | Maximum folder dialog gap |
 | `FOLDER_DIALOG_PAGE_PADDING` | `24` | Uniform folder grid page padding on single-page folders |
+| `FOLDER_TITLE_SIDE_INSET_FALLBACK` | `36` | Folder title bar side padding fallback (`gridLayout.js`) |
+| `FOLDER_TITLE_BUTTON_FALLBACK` | `40` | Folder title edit/ghost button width fallback (`gridLayout.js`) |
 | `MAX_SNAPSHOTS` | `20` | Maximum saved layout snapshots (`snapshots.js`) |
 | `SNAPSHOT_VERSION` | `1` | Snapshot JSON schema version (`snapshots.js`) |
 
@@ -181,6 +183,12 @@ Folder dialogs also fit the configured grid instead of keeping Shell's fixed 720
   keep Shell's default padding and panel so arrows and page indicators still have room;
   Shell recomputes that padding during allocation, and the captured padding is restored on
   disable.
+- Shell's folder-name entry has a fixed `12em` CSS width, which made the title bar wider than
+  a compact panel: the folder name drifted off-center and the edit button overflowed the
+  panel. `fitFolderDialogTitle()` sizes `dialog._entry.width` from the panel content width
+  minus the measured title-bar insets and the ghost/edit buttons, so both stay inside and the
+  name remains centered. Long names ellipsize in the label and stay editable in the entry.
+  The entry width returns to automatic sizing when the folder is paged or restored.
 - `_patchFolderOpen()` wraps each folder icon's `open()` method so the dialog is created and
   sized before Shell calls `popup()`. A `notify::allocation` handler on every folder grid
   schedules a post-layout pass, because label metrics and the title box are only final once
