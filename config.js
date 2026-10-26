@@ -12,7 +12,8 @@ export const SETTINGS_KEYS = [
     'custom-row-spacing', 'custom-column-spacing',
     'folder-rows', 'folder-columns',
     'folder-row-spacing', 'folder-column-spacing',
-    'folder-title-size', 'show-app-names',
+    'folder-title-size', 'folder-edge-padding-auto',
+    'folder-edge-padding', 'show-app-names',
 ]
 
 export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
@@ -22,6 +23,9 @@ export const FOLDER_MAX_DIMENSION = 6
 export const FOLDER_MAX_SPACING = 64
 export const FOLDER_MAX_TITLE_SIZE = 48
 export const FOLDER_DIALOG_PAGE_PADDING = 24
+export const FOLDER_EDGE_PADDING_MAX = 96
+export const FOLDER_EDGE_PADDING_AUTO_MIN = 12
+export const FOLDER_EDGE_PADDING_AUTO_MAX = 24
 
 export const PRESETS = [
     {iconSize: 96, rows: 4, columns: 6, gap: 24},
@@ -67,8 +71,24 @@ export function readFolderConfig(settings) {
         rowSpacing: settings.get_int('folder-row-spacing'),
         columnSpacing: settings.get_int('folder-column-spacing'),
         titleSize: settings.get_int('folder-title-size'),
+        edgePaddingAuto: settings.get_boolean('folder-edge-padding-auto'),
+        edgePadding: settings.get_int('folder-edge-padding'),
         showNames: settings.get_boolean('show-app-names'),
     }
+}
+
+export function autoFolderEdgePadding(iconSize) {
+    const size = Number.isFinite(Number(iconSize))
+        ? Math.max(0, Number(iconSize)) : 0
+    return Math.max(FOLDER_EDGE_PADDING_AUTO_MIN,
+        Math.min(FOLDER_EDGE_PADDING_AUTO_MAX, Math.round(size / 4)))
+}
+
+export function resolveFolderEdgePadding(iconSize, auto, padding) {
+    if (auto)
+        return autoFolderEdgePadding(iconSize)
+    const value = Number.isFinite(Number(padding)) ? Number(padding) : 0
+    return Math.max(0, Math.min(FOLDER_EDGE_PADDING_MAX, Math.round(value)))
 }
 
 export function computePreviewTileSize(iconSize, measuredTileSize = null) {

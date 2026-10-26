@@ -6,6 +6,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js'
 
 import {
     FOLDER_DIALOG_PAGE_PADDING,
+    FOLDER_EDGE_PADDING_MAX,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
@@ -14,6 +15,7 @@ import {
     computeGridFit,
     computePreviewTileSize,
     readFolderConfig,
+    resolveFolderEdgePadding,
 } from './config.js'
 import {
     reflowPages,
@@ -44,13 +46,14 @@ const ENFORCED_PROPERTIES = [
 
 const SETTLE_PUBLISH_DELAY_MS = 600
 
-function createFolderPagePadding() {
-    const padding = FOLDER_DIALOG_PAGE_PADDING
+function createFolderPagePadding(padding = FOLDER_DIALOG_PAGE_PADDING) {
+    const value = Math.max(0, Math.min(FOLDER_EDGE_PADDING_MAX,
+        Math.round(Number(padding) || 0)))
     return new Clutter.Margin({
-        top: padding,
-        right: padding,
-        bottom: padding,
-        left: padding,
+        top: value,
+        right: value,
+        bottom: value,
+        left: value,
     })
 }
 
@@ -576,18 +579,24 @@ export default class AppGridSizeExtension extends Extension {
 
     _readGridConfig() {
         const folder = readFolderConfig(this._settings)
+        const usePresets = this._settings.get_boolean('use-presets')
+        const preset = PRESETS[this._settings.get_int('preset-level')]
+        const iconSize = usePresets
+            ? preset.iconSize
+            : this._settings.get_int('custom-icon-size')
         const folderConfig = {
             folderRows: folder.rows,
             folderColumns: folder.columns,
             folderRowSpacing: folder.rowSpacing,
             folderColumnSpacing: folder.columnSpacing,
             folderTitleSize: folder.titleSize,
+            folderEdgePadding: resolveFolderEdgePadding(iconSize,
+                folder.edgePaddingAuto, folder.edgePadding),
             showNames: folder.showNames,
         }
-        if (this._settings.get_boolean('use-presets')) {
-            const preset = PRESETS[this._settings.get_int('preset-level')]
+        if (usePresets) {
             return {
-                iconSize: preset.iconSize,
+                iconSize,
                 rows: preset.rows,
                 columns: preset.columns,
                 rowGap: preset.gap,
@@ -597,7 +606,7 @@ export default class AppGridSizeExtension extends Extension {
             }
         }
         return {
-            iconSize: this._settings.get_int('custom-icon-size'),
+            iconSize,
             rows: this._settings.get_int('custom-rows'),
             columns: this._settings.get_int('custom-columns'),
             rowGap: this._settings.get_int('custom-row-spacing'),
@@ -646,7 +655,9 @@ export default class AppGridSizeExtension extends Extension {
             rowSpacing: config.folderRowSpacing,
             columnSpacing: config.folderColumnSpacing,
             titleSize: config.folderTitleSize,
-            pagePadding: createFolderPagePadding(),
+            edgePadding: config.folderEdgePadding,
+            pagePadding: createFolderPagePadding(
+                config.folderEdgePadding),
         }
     }
 
@@ -692,35 +703,35 @@ export default class AppGridSizeExtension extends Extension {
         for (const lm of active) {
             if (this._folderEnforcerIds.has(lm))
                 continue
+            const enforce = () => {
+                if (!this._applied || !this._activeConfig)
+                    return
+                const config = this._activeConfig
+                if (lm.row_spacing !== config.folderRowSpacing)
+                    lm.row_spacing = config.folderRowSpacing
+                if (lm.column_spacing !== config.folderColumnSpacing)
+                    lm.column_spacing = config.folderColumnSpacing
+                if (lm.max_row_spacing !== UNCONSTRAINED_SPACING)
+                    lm.max_row_spacing = UNCONSTRAINED_SPACING
+                if (lm.max_column_spacing !== UNCONSTRAINED_SPACING)
+                    lm.max_column_spacing = UNCONSTRAINED_SPACING
+                enforceFolderPagePadding(lm,
+                    this._folderDialogConfig().pagePadding)
+            }
             const ids = []
-            for (const [property, key, desired] of [
-                ['row-spacing', 'row_spacing',
-                    () => this._activeConfig.folderRowSpacing],
-                ['column-spacing', 'column_spacing',
-                    () => this._activeConfig.folderColumnSpacing],
-                ['max-row-spacing', 'max_row_spacing',
-                    () => UNCONSTRAINED_SPACING],
-                ['max-column-spacing', 'max_column_spacing',
-                    () => UNCONSTRAINED_SPACING],
+            for (const [property, key] of [
+                ['row-spacing', 'row_spacing'],
+                ['column-spacing', 'column_spacing'],
+                ['max-row-spacing', 'max_row_spacing'],
+                ['max-column-spacing', 'max_column_spacing'],
             ]) {
-                if (!(property in lm))
+                if (!(key in lm))
                     continue
-                ids.push(lm.connect(`notify::${property}`, () => {
-                    if (!this._applied || !this._activeConfig)
-                        return
-                    const value = desired()
-                    if (lm[key] !== value)
-                        lm[key] = value
-                }))
+                ids.push(lm.connect(`notify::${property}`, enforce))
             }
-            if ('page-padding' in lm || 'page_padding' in lm) {
-                ids.push(lm.connect('notify::page-padding', () => {
-                    if (!this._applied || !this._activeConfig)
-                        return
-                    enforceFolderPagePadding(lm,
-                        this._folderDialogConfig().pagePadding)
-                }))
-            }
+            if ('page-padding' in lm || 'page_padding' in lm)
+                ids.push(lm.connect('notify::page-padding', enforce))
+            enforce()
             this._folderEnforcerIds.set(lm, ids)
         }
     }

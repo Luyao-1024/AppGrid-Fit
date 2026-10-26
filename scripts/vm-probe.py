@@ -362,6 +362,13 @@ try {{
     if (box)
         boxPosition = box.get_transformed_position();
 }} catch (error) {{}}
+let indicatorHeight = null;
+try {{
+    const view = dialog?._view;
+    const scroll = view?._box?.get_first_child?.();
+    if (view && scroll && view.height > scroll.height)
+        indicatorHeight = Math.round(view.height - scroll.height);
+}} catch (error) {{}}
 JSON.stringify({{
     found: !!folder,
     open: dialog?.visible ?? false,
@@ -375,6 +382,7 @@ JSON.stringify({{
     pageCount: lm?._pages?.length ?? null,
     pageWidth: lm?._pageWidth ?? null,
     pageHeight: lm?._pageHeight ?? null,
+    indicatorHeight,
     cellSize: cellSize > 0 ? Math.ceil(cellSize) : null,
     pagePadding: padding ? {{
         top: padding.top,
@@ -479,6 +487,8 @@ def dialog_fit_metrics(state):
     if not any(isinstance(value, (int, float)) and value > 0
                for value in padding.values()):
         padding = state.get('cssPagePadding') or padding
+    paged = (state.get('pageCount') or 0) > 1
+    indicator_height = state.get('indicatorHeight') if paged else 0
     values = [
         state.get('rows'), state.get('columns'), state.get('cellSize'),
         dialog.get('width'), dialog.get('height'),
@@ -488,22 +498,34 @@ def dialog_fit_metrics(state):
     ]
     if any(not isinstance(value, (int, float)) for value in values):
         return None
+    if paged and not isinstance(indicator_height, (int, float)):
+        return None
+    row_spacing = state.get('rowSpacing')
+    column_spacing = state.get('columnSpacing')
+    if not isinstance(row_spacing, (int, float)):
+        row_spacing = FOLDER_ROW_SPACING
+    if not isinstance(column_spacing, (int, float)):
+        column_spacing = FOLDER_COLUMN_SPACING
     content_width = (state['columns'] * state['cellSize'] +
-        max(0, state['columns'] - 1) * FOLDER_COLUMN_SPACING +
+        max(0, state['columns'] - 1) * column_spacing +
         padding['left'] + padding['right'])
     content_height = (state['rows'] * state['cellSize'] +
-        max(0, state['rows'] - 1) * FOLDER_ROW_SPACING +
+        max(0, state['rows'] - 1) * row_spacing +
         padding['top'] + padding['bottom'])
     natural_width = content_width + 2
-    natural_height = dialog['titleHeight'] + content_height
-    expected_width = (max(natural_width, natural_height)
-        if state['rows'] == state['columns'] else natural_width)
+    natural_height = (dialog['titleHeight'] + content_height +
+        (indicator_height if paged else 0))
+    expected_width = natural_width
+    if not paged and state['rows'] == state['columns']:
+        expected_width = max(natural_width, natural_height)
     return {
         'expectedWidth': round(expected_width),
         'expectedHeight': round(natural_height),
         'widthDelta': round(dialog['width'] - expected_width),
         'heightDelta': round(dialog['height'] - natural_height),
         'pageHeightDelta': round(state['pageHeight'] - content_height),
+        'paged': paged,
+        'indicatorHeight': indicator_height,
         'style': dialog.get('style'),
     }
 
@@ -525,15 +547,35 @@ def check_folder_dialog_fit(state, label):
     return metrics
 
 
-def folder_page_padding_matches(state):
+def folder_padding_matches(state, value):
     padding = state.get('pagePadding') or {}
-    return all(padding.get(side) == FOLDER_PAGE_PADDING for side in (
+    return all(padding.get(side) == value for side in (
         'top', 'right', 'bottom', 'left'))
+
+
+def folder_page_padding_matches(state):
+    return folder_padding_matches(state, FOLDER_PAGE_PADDING)
+
+
+def folder_visible_item_rects(state):
+    dialog = state.get('dialog') or {}
+    rects = [rect for rect in state.get('itemRects') or [] if rect]
+    keys = ('x', 'y', 'width', 'height')
+    if not rects or not all(isinstance(dialog.get(key), (int, float))
+            for key in keys):
+        return []
+    return [
+        rect for rect in rects
+        if rect['x'] >= dialog['x'] - 2 and
+        rect['y'] >= dialog['y'] - 2 and
+        rect['x'] + rect['width'] <= dialog['x'] + dialog['width'] + 2 and
+        rect['y'] + rect['height'] <= dialog['y'] + dialog['height'] + 2
+    ]
 
 
 def folder_horizontal_margins(state):
     dialog = state.get('dialog') or {}
-    rects = [rect for rect in state.get('itemRects') or [] if rect]
+    rects = folder_visible_item_rects(state)
     if not rects or not all(
             isinstance(dialog.get(key), (int, float))
             for key in ('x', 'width')):
@@ -542,6 +584,20 @@ def folder_horizontal_margins(state):
     right = (dialog['x'] + dialog['width']) - max(
         rect['x'] + rect['width'] for rect in rects)
     return {'left': round(left), 'right': round(right)}
+
+
+def folder_vertical_margins(state):
+    dialog = state.get('dialog') or {}
+    rects = folder_visible_item_rects(state)
+    if not rects or not all(isinstance(dialog.get(key), (int, float))
+            for key in ('x', 'y', 'width', 'height')):
+        return None
+    return {
+        'items': len(rects),
+        'top': round(min(rect['y'] for rect in rects) - dialog['y']),
+        'bottom': round(dialog['y'] + dialog['height'] -
+            max(rect['y'] + rect['height'] for rect in rects)),
+    }
 
 
 def folder_margins_balanced(state):
@@ -613,6 +669,8 @@ def check_folder_icon_sizes():
     gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
     gs_set('folder-column-spacing', FOLDER_COLUMN_SPACING)
     gs_set('folder-title-size', FOLDER_TITLE_SIZE)
+    gs_set('folder-edge-padding-auto', False)
+    gs_set('folder-edge-padding', FOLDER_PAGE_PADDING)
     dialog_heights = {}
     for size in (32, 96):
         gs_set('custom-icon-size', size)
@@ -778,16 +836,32 @@ def check_folder_icon_sizes():
             state.get('itemCount') == len(expanded_apps) and
             state.get('itemIds') == expanded_apps and
             state.get('dialog') and
-            not (state['dialog'].get('style') or '').strip() and
-            state['dialog']['height'] >= 500 and
             state,
-        'paged six-app folder')
+        'paged six-app folder', timeout=30)
+    try:
+        wait_for(lambda: folder_dialog_fits(folder_state()),
+            'paged six-app fit', timeout=10)
+    except RuntimeError:
+        pass
+    paged = folder_state()
     check('shrinking folder capacity reflows into pages',
         paged['rows'] == 2 and paged['columns'] == 2 and
         paged['pageCount'] == 2 and
-        paged['itemIds'] == expanded_apps and
-        not (paged['dialog'].get('style') or '').strip(),
+        paged['itemIds'] == expanded_apps,
         paged)
+    check_folder_dialog_fit(paged, 'paged six apps')
+    vertical = folder_vertical_margins(paged)
+    check('paged folder grid is vertically centered',
+        bool(vertical and vertical['items'] == 4 and
+            vertical['top'] >= 20 and vertical['bottom'] >= 20 and
+            abs(vertical['top'] - vertical['bottom']) <= 100),
+        vertical)
+    horizontal = folder_horizontal_margins(paged)
+    check('paged folder side margins stay tight',
+        bool(horizontal and horizontal['left'] >= 20 and
+            horizontal['right'] >= 20 and
+            horizontal['left'] <= 140 and horizontal['right'] <= 140),
+        horizontal)
 
     gs_set('folder-rows', FOLDER_ROWS)
     gs_set('folder-columns', FOLDER_COLUMNS)
@@ -857,17 +931,34 @@ def check_folder_icon_sizes():
         restored.get('title'))
     set_extension_enabled(True)
     wait_for_config(96, 2, 3)
-    reenabled = wait_for(
-        lambda: (state := folder_state()) and
-            state.get('open') and
-            state.get('rows') == FOLDER_ROWS and
-            state.get('columns') == FOLDER_COLUMNS and
-            state.get('dialog') and
-            folder_page_padding_matches(state) and
-            folder_dialog_fits(state) and
-            state,
-        'folder dialog content fit after re-enable')
+    try:
+        reenabled = wait_for(
+            lambda: (state := folder_state()) and
+                state.get('open') and
+                state.get('rows') == FOLDER_ROWS and
+                state.get('columns') == FOLDER_COLUMNS and
+                state.get('rowSpacing') == FOLDER_ROW_SPACING and
+                state.get('columnSpacing') == FOLDER_COLUMN_SPACING and
+                state.get('dialog') and
+                folder_page_padding_matches(state) and
+                folder_dialog_fits(state) and
+                state,
+            'folder dialog content fit after re-enable')
+    except RuntimeError:
+        print(f'folder state after re-enable: {json.dumps(folder_state())}')
+        print(f'folder fit after re-enable: '
+            f'{json.dumps(dialog_fit_metrics(folder_state()))}')
+        print(f'folder settings after re-enable: '
+            f'{gs_get("folder-row-spacing")} / '
+            f'{gs_get("folder-column-spacing")} / '
+            f'{gs_get("folder-rows")} / {gs_get("folder-columns")} / '
+            f'{gs_get("custom-icon-size")}')
+        raise
     check_folder_dialog_fit(reenabled, 're-enabled')
+    check('folder spacing survives re-enable',
+        reenabled.get('rowSpacing') == FOLDER_ROW_SPACING and
+        reenabled.get('columnSpacing') == FOLDER_COLUMN_SPACING,
+        reenabled)
     custom_edit_width = (reenabled.get('title') or {}).get('edit', {}).get(
         'width') or 0
     gs_set('folder-title-size', 0)
@@ -887,6 +978,172 @@ def check_folder_icon_sizes():
         auto_title['title']['edit']['width'] > custom_edit_width + 2,
         {'custom': custom_edit_width, 'title': auto_title.get('title')})
     close_test_folder()
+
+
+def check_paged_folder_fit():
+    expanded_apps = FOLDER_APPS + [
+        f'appgrid-test-{index}.desktop' for index in range(14, 21)]
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(expanded_apps))
+    gs_set('use-presets', True)
+    gs_set('preset-level', 2)
+    gs_set('folder-rows', 3)
+    gs_set('folder-columns', 3)
+    gs_set('folder-row-spacing', 12)
+    gs_set('folder-column-spacing', 12)
+    gs_set('folder-title-size', 20)
+    gs_set('folder-edge-padding-auto', False)
+    gs_set('folder-edge-padding', FOLDER_PAGE_PADDING)
+    wait_for(lambda: folder_state().get('found'),
+        'paged fit folder icon', timeout=30)
+    open_test_folder()
+    state = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 3 and
+            state.get('columns') == 3 and
+            state.get('itemCount') == len(expanded_apps) and
+            state.get('pageCount') == 2 and
+            state.get('fixedIconSize') == 48 and
+            state,
+        'paged 3x3 folder', timeout=30)
+    try:
+        wait_for(lambda: folder_dialog_fits(folder_state()),
+            'paged 3x3 folder fit', timeout=10)
+    except RuntimeError:
+        pass
+    state = folder_state()
+    check_folder_dialog_fit(state, 'paged 3x3 48px')
+    horizontal = folder_horizontal_margins(state)
+    vertical = folder_vertical_margins(state)
+    margins = {**(horizontal or {}), **(vertical or {})}
+    check('paged folder margins stay tight',
+        bool(horizontal and vertical and
+            min(horizontal['left'], horizontal['right'],
+                vertical['top'], vertical['bottom']) >= 20 and
+            max(horizontal['left'], horizontal['right'],
+                vertical['top'], vertical['bottom']) <= 140),
+        margins)
+    close_test_folder()
+    gs_set('folder-columns', 3)
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(FOLDER_APPS))
+
+
+def check_folder_edge_padding():
+    gs_set('use-presets', False)
+    gs_set('custom-icon-size', 32)
+    gs_set('folder-rows', FOLDER_ROWS)
+    gs_set('folder-columns', FOLDER_COLUMNS)
+    gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
+    gs_set('folder-column-spacing', FOLDER_COLUMN_SPACING)
+    gs_set('folder-title-size', FOLDER_TITLE_SIZE)
+    gs_set('folder-edge-padding-auto', True)
+    wait_for_config(32, 2, 3)
+    open_test_folder()
+    auto = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('fixedIconSize') == 32 and
+            state.get('pageCount') == 1 and
+            folder_padding_matches(state, 12) and
+            folder_dialog_fits(state) and
+            state,
+        'automatic folder edge padding at 32px')
+    check('automatic edge padding follows a 32px icon',
+        folder_padding_matches(auto, 12), auto.get('pagePadding'))
+    check_folder_dialog_fit(auto, 'automatic edge 32px')
+    auto_width = auto['dialog']['width']
+    auto_height = auto['dialog']['height']
+
+    gs_set('folder-edge-padding-auto', False)
+    gs_set('folder-edge-padding', 40)
+    manual = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            folder_padding_matches(state, 40) and
+            state.get('dialog') and
+            state['dialog']['width'] == auto_width + 56 and
+            state['dialog']['height'] == auto_height + 56 and
+            folder_dialog_fits(state) and
+            state,
+        'manual folder edge padding')
+    check('manual edge padding overrides the automatic value',
+        folder_padding_matches(manual, 40), manual.get('pagePadding'))
+    check('manual edge padding resizes the dialog by both edges',
+        manual['dialog']['width'] == auto_width + 56 and
+        manual['dialog']['height'] == auto_height + 56,
+        {'automatic': [auto_width, auto_height],
+         'manual': [manual['dialog']['width'], manual['dialog']['height']]})
+    check_folder_dialog_fit(manual, 'manual edge 40px')
+
+    gs_set('custom-icon-size', 96)
+    gs_set('folder-edge-padding-auto', True)
+    wait_for_config(96, 2, 3)
+    capped = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('fixedIconSize') == 96 and
+            state.get('pageCount') == 1 and
+            folder_padding_matches(state, 24) and
+            folder_dialog_fits(state) and
+            state,
+        'automatic folder edge padding at 96px')
+    check('automatic edge padding caps at 24 px for large icons',
+        folder_padding_matches(capped, 24), capped.get('pagePadding'))
+    check_folder_dialog_fit(capped, 'automatic edge 96px')
+
+    gs_set('custom-icon-size', 32)
+    wait_for_config(32, 2, 3)
+    expanded_apps = FOLDER_APPS + [
+        'appgrid-test-14.desktop',
+        'appgrid-test-15.desktop',
+    ]
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(expanded_apps))
+    gs_set('folder-rows', 2)
+    gs_set('folder-columns', 2)
+    paged = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('pageCount') == 2 and
+            state.get('itemCount') == len(expanded_apps) and
+            (padding := state.get('pagePadding') or {}) and
+            padding.get('top') == 12 and
+            padding.get('bottom') == 12 and
+            padding.get('left') == padding.get('right') and
+            (padding.get('left') or 0) >= 40 and
+            (state.get('indicatorHeight') or 0) > 0 and
+            folder_dialog_fits(state) and
+            state,
+        'automatic paged edge padding')
+    padding = paged.get('pagePadding') or {}
+    check('automatic edge padding keeps arrow strips on paged folders',
+        padding.get('top') == 12 and padding.get('bottom') == 12 and
+        padding.get('left') == padding.get('right') and
+        padding.get('left') >= 40, padding)
+    check_folder_dialog_fit(paged, 'automatic paged edge')
+
+    gs_set('folder-row-spacing', 0)
+    gs_set('folder-edge-padding-auto', False)
+    gs_set('folder-edge-padding', 96)
+    wide = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('pageCount') == 2 and
+            folder_padding_matches(state, 96) and
+            folder_dialog_fits(state) and
+            state,
+        'manual paged edge padding')
+    check('manual edge padding applies to paged folder margins',
+        folder_padding_matches(wide, 96), wide.get('pagePadding'))
+    check_folder_dialog_fit(wide, 'manual paged edge')
+
+    close_test_folder()
+    gs_set('folder-edge-padding-auto', True)
+    gs_set('folder-edge-padding', FOLDER_PAGE_PADDING)
+    gs_set('folder-rows', FOLDER_ROWS)
+    gs_set('folder-columns', FOLDER_COLUMNS)
+    gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(FOLDER_APPS))
+    wait_for(lambda: folder_state().get('found'), 'edge padding cleanup')
 
 
 def check_theme_layout(css_row, css_column, css_max_row, css_max_column):
@@ -1285,6 +1542,8 @@ JSON.stringify({
                 gs_set('custom-icon-size', 32)
                 wait_for_config(32, 2, 3)
                 check_folder_icon_sizes()
+                check_paged_folder_fit()
+                check_folder_edge_padding()
             finally:
                 close_test_folder()
                 restore_test_folder(folder_backup)

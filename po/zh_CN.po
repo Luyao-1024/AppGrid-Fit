@@ -79,14 +79,41 @@ msgstr "标题大小（像素）"
 msgid "0 follows the system theme; the edit button scales with the title"
 msgstr "0 表示跟随系统主题；编辑按钮会随标题缩放"
 
+msgid "Automatic edge padding"
+msgstr "自动边缘留白"
+
+msgid "Edge padding (px)"
+msgstr "边缘留白（像素）"
+
+msgid "Used when automatic edge padding is off"
+msgstr "关闭自动边缘留白时使用"
+
+msgid "Follows the icon size: {padding} px"
+msgstr "跟随图标大小：{padding} 像素"
+
+msgid "Using the manual edge padding below"
+msgstr "使用下方的自定义边缘留白"
+
+msgid "Manual value {padding} px; used when automatic is off"
+msgstr "手动值 {padding} 像素；关闭自动时使用"
+
+msgid "Distance from the grid to the panel edge"
+msgstr "网格到面板边缘的距离"
+
+msgid "auto"
+msgstr "自动"
+
+msgid "manual"
+msgstr "手动"
+
 msgid "{size} px"
 msgstr "{size} 像素"
 
 msgid "system"
 msgstr "系统"
 
-msgid "{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · title {title} · {labels} · dialog fits the configured grid"
-msgstr "{rows} × {columns} = {capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · 标题 {title} · {labels} · 弹窗适配所配置的网格"
+msgid "{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · edge {edge} px {edgeMode} · title {title} · {labels} · dialog fits the configured grid"
+msgstr "{rows} × {columns} = {capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · 边缘 {edge} 像素 {edgeMode} · 标题 {title} · {labels} · 弹窗适配所配置的网格"
 
 msgid "labels shown"
 msgstr "显示名称"
@@ -208,8 +235,8 @@ msgstr "{preset} · {icon} 像素"
 msgid "Custom · {icon} px · {rows}×{columns}"
 msgstr "自定义 · {icon} 像素 · {rows}×{columns}"
 
-msgid "{rows}×{columns} · title {title}"
-msgstr "{rows}×{columns} · 标题 {title}"
+msgid "{rows}×{columns} · title {title} · edge {edge} px"
+msgstr "{rows}×{columns} · 标题 {title} · 边缘 {edge} 像素"
 
 msgid "{count} saved"
 msgstr "已保存 {count} 个"
@@ -223,8 +250,11 @@ msgstr "页面合并会改写应用顺序"
 msgid "Folder dialog preview · {rows} × {columns}"
 msgstr "文件夹弹窗预览 · {rows} × {columns}"
 
-msgid "{capacity} apps per page · gap {rowGap}×{colGap} px · {icon} px icons · title {title} · {labels}"
-msgstr "{capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · {icon} 像素图标 · 标题 {title} · {labels}"
+msgid "{capacity} apps per page · gap {rowGap}×{colGap} px · edge {edge} px {edgeMode} · {icon} px icons · title {title} · {labels}"
+msgstr "{capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · 边缘 {edge} 像素 {edgeMode} · {icon} 像素图标 · 标题 {title} · {labels}"
+
+msgid "Paged folders keep side room for navigation arrows"
+msgstr "分页文件夹会保留导航箭头的侧边空间"
 
 msgid "Live Shell geometry"
 msgstr "Shell 实时几何"

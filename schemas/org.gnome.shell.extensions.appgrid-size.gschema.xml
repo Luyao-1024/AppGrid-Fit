@@ -85,6 +85,19 @@
       <description>Folder title font size in pixels; 0 follows the system theme.</description>
     </key>
 
+    <key type="b" name="folder-edge-padding-auto">
+      <default>true</default>
+      <summary>Automatic folder edge padding</summary>
+      <description>Derive the folder grid edge padding from the icon size; disable to use a fixed value.</description>
+    </key>
+
+    <key type="i" name="folder-edge-padding">
+      <default>24</default>
+      <range min="0" max="96"/>
+      <summary>Folder dialog edge padding</summary>
+      <description>Distance from the folder grid to the panel edge in pixels when automatic padding is disabled.</description>
+    </key>
+
     <key type="b" name="show-app-names">
       <default>true</default>
       <summary>Show application names</summary>
