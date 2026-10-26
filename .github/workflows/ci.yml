@@ -37,6 +37,14 @@ jobs:
       - name: Validate source and run tests
         run: npm run check
 
+      - name: Validate test harness scripts
+        run: |
+          set -euo pipefail
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+          python3 -m py_compile scripts/vm-probe.py
+
       - name: Validate schema reproducibility
         run: |
           set -euo pipefail

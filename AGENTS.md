@@ -138,6 +138,16 @@ and restored on disable or partial failure. Resolve the grid's theme style befor
 defaults because spacing may still be zero during Shell startup. Do not require grid modes
 to find a compatible grid.
 
+### Folder dialog icon sizing
+
+GNOME Shell creates a separate 3×3 `FolderGrid` for folder dialogs; it is not part of
+`appDisplay._grid`, so it keeps its adaptive icon size by default. `_apply()` and the
+overview `shown` handler call `setFolderIconSizes()` for every
+`appDisplay._folderIcons[*].view._grid` and store the previous `fixed_icon_size` in
+`_originalFolders`. `IconGridLayout.adaptToSize()` only re-evaluates the icon size after the
+page dimensions change, so the helper also clears `_pageWidth`/`_pageHeight` and queues a
+relayout. Disable and partial-failure restoration put Shell's original adaptive value back.
+
 ### CSS override defense
 
 `IconGrid.vfunc_style_changed()` resets spacing properties from CSS on theme switches.
@@ -246,13 +256,14 @@ enable()
   │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
+  │   ├─ _applyFolderIconSizes()         — apply icon size to every folder dialog grid
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
   │   ├─ restorePersistedPageOrder(...)   — first-run: rebuild order saved before Shell's 24-item split
   │   ├─ reflowPages(lm, {consolidate})  — rebuild overflow in order; optionally fill vacancies
   │   ├─ syncPageManagerPages(...)       — mirror rebuilt page boundaries in memory
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
   ├─ Main.overview.connect('showing')     — cancel settle timer, mark unsettled, apply
-  ├─ Main.overview.connect('shown')       — schedule settled publish (600 ms)
+  ├─ Main.overview.connect('shown')       — re-apply folder icon sizes, schedule settled publish (600 ms)
   ├─ Main.overview.connect('hiding')      — cancel settle timer, clear settled state
   └─ Main.layoutManager.connect('monitors-changed')
 
@@ -263,7 +274,7 @@ disable()
   ├─ _disconnectTheme()
   ├─ _disconnectSettings()  — disconnect + null _settings
   ├─ _disconnectGridBindings() — disconnect allocation + notify handlers
-  ├─ _restoreOriginalLayout() — restore saved _original values, sync icon size, reflow, relayout
+  ├─ _restoreOriginalLayout() — restore saved _original values, folder icon sizes, sync icon size, reflow, relayout
   └─ _resetState()
 
 _scheduleApply()       — coalesce settings/theme/allocation changes into one idle apply
@@ -272,11 +283,14 @@ _warnOnce(message)     — log each missing/unsupported-grid message until the n
 _getControlsManager()  — Main.overview?._overview?._controls ?? null
 _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
+_applyFolderIconSizes() / _restoreFolderIconSizes() — apply or restore icon sizes on folder dialog grids
 ```
 
 Original layout values are stored in `this._original` for the current layout manager and
 restored on disable or after a partial apply failure. The snapshot includes
 `effectiveIconSize` (`lm._iconSize`) for adaptive layouts without `_findBestIconSize()`.
+Folder grid originals are stored separately in `this._originalFolders`, keyed by layout
+manager.
 
 ---
 
@@ -429,45 +443,72 @@ gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
 gnome-extensions enable appgrid-size@luyao
 ```
 
-### Ubuntu compatibility verification
+### QEMU compatibility verification (default acceptance)
+
+```bash
+scripts/verify-qemu.sh                        # ubuntu-24.04, ubuntu-26.04, fedora-44
+scripts/verify-qemu.sh --case ubuntu-26.04
+scripts/verify-qemu.sh --rebuild-golden --case fedora-44
+```
+
+Base images come from the Tsinghua mirror. The first run provisions a golden qcow2 per case
+once; every later run boots a fresh overlay backed by the golden image and deletes the overlay
+afterwards, so extension settings, page order and the guest desktop always start clean. The
+cache is `${XDG_CACHE_HOME:-~/.cache}/appgrid-qemu` (`images/`, `golden/`, `keys/`, `runs/`,
+`logs/`). A stamp records the provisioning hash, base-image size/mtime and SSH-key
+fingerprint; changing any of them rebuilds the golden image.
+
+Guest packages install from the Tsinghua mirror as well. Ubuntu's cloud-init `apt` section
+rewrites primary and security URIs before `package_update`; Fedora's boot command comments
+out `metalink=` in `fedora.repo`, `fedora-updates.repo` and `fedora-updates-testing.repo` and
+replaces the placeholder base URL, and disables the Cisco OpenH264 repository that Tsinghua
+does not mirror. The finalize step then rejects any active apt source or Fedora repository
+that does not point at `mirrors.tuna.tsinghua.edu.cn`, so provisioning fails instead of
+silently falling back to upstream mirrors.
+
+`scripts/qemu-guest-probe.sh` unpacks the extension and schema into an isolated XDG tree,
+starts `gnome-shell --headless --wayland --no-x11 --unsafe-mode` under `dbus-run-session`,
+verifies `Main.layoutManager.primaryMonitor` matches `MONITOR`, enables the extension, and
+runs `scripts/vm-probe.py`. `--no-x11` is required: without it, libgvc synchronously connects
+to Xwayland before the compositor can service it, wedging the Shell main loop.
+`--unsafe-mode` replaces the old helper extension. `HOME`, `XDG_*`, `GSETTINGS_SCHEMA_DIR`
+and `DISPLAY=:999` must be exported **before** `dbus-run-session` so activated services such
+as dconf use the isolated config instead of `/home/tester`.
+
+The guest script preconfigures a 2×3 custom grid before enabling the extension, so the
+`app-picker-layout` captured at probe start uses the same 6-item page capacity it is restored
+with later. Without that, Shell's `_redisplay()` can scramble positions that exceed the
+restore capacity.
+
+The probe backs up and restores extension settings, `org.gnome.shell app-picker-layout`, and
+(when `TEST_FOLDER=1`) the temporary folder settings used for the 32 px/96 px folder-dialog
+checks and the disable-restoration check. Acceptance is the probe exit status; a failing run
+copies the guest work directory and Shell log into `<cache>/logs/`, and the run overlay is
+still discarded unless `--keep-overlay` is used.
+
+Host requirements: x86_64 Linux, QEMU, OpenSSH client, curl, python3, `timeout`, and one of
+`cloud-localds`/`genisoimage`/`mkisofs`/`xorriso`. KVM is used when usable, TCG otherwise.
+The virtual monitor defaults to 1920×1080 for every case; `MONITOR=WxH` overrides it.
+
+### Legacy live-session harnesses
+
+These are for manual debugging on a disposable VM or host and are not part of the default
+acceptance path:
 
 ```bash
 scripts/verify-ubuntu-vm.sh
 SKIP_RESTART=1 scripts/verify-ubuntu-vm.sh   # already-installed files
 SCREENSHOT_DIR='' scripts/verify-ubuntu-vm.sh # no screenshots
-```
-
-The host script builds and installs the package, restarts GDM, enables Looking Glass unsafe
-mode with VirtualBox keyboard automation, runs `scripts/vm-probe.py` inside the guest, and
-captures `/tmp/appgrid-vm/app-grid.png` and `prefs.png`. The probe currently runs 64 checks
-against Ubuntu's adaptive layout: presets, custom grids, reflow, disable/re-enable, theme
-spacing and limits, page-indicator/dock geometry, consolidation, and saved page order.
-Its waits require a settled snapshot whose page indicator is already centered under the grid,
-so animation frames cannot cause transient geometry failures.
-Acceptance is the probe exit status; screenshots are diagnostic artifacts and only need a
-one-time review when adding or changing a visual test case. The probe requires
-`GSETTINGS_SCHEMA_DIR` pointing at the installed extension's `schemas/` and a session D-Bus
-address (defaults to the current UID's bus). It backs up and restores extension settings and
-`org.gnome.shell app-picker-layout`.
-
-GNOME Shell caches extension ESM modules: disabling/enabling does not load changed files.
-Restart the graphical session (the script does this) after installing a new build.
-
-### Fedora / upstream headless verification
-
-```bash
 scripts/verify-fedora-headless.sh
 ```
 
-The harness builds the package into a temporary `HOME` and XDG tree, starts
-`gnome-shell --headless --wayland` under `dbus-run-session`, installs the extension plus a
-helper that enables unsafe mode, and runs the same probe with
-`EXPECTED_LAYOUT_MODE=modes FORCE_APP_GRID=1`. Because headless Shell does not advance the
-overview animation, the probe forces the app-grid adjustment after `showApps()`. The probe
-passes 63 checks against the mode-based layout. The script snapshots and restores
-`org.gnome.shell enabled-extensions` and `app-picker-layout`, and fails if the isolated run
-changes live-session settings. All XDG variables must be set on the `dbus-run-session`
-command so activated services such as dconf cannot fall back to the live session.
+The Ubuntu script builds/installs the package, restarts GDM, enables Looking Glass unsafe
+mode through VirtualBox keyboard automation, runs the probe, and captures diagnostic
+screenshots. The Fedora script runs the probe against the host's isolated headless Shell and
+guards live `enabled-extensions` and `app-picker-layout` settings against leakage.
+
+GNOME Shell caches extension ESM modules: disabling/enabling does not load changed files.
+Restart the graphical session after installing a new build.
 
 ---
 
@@ -501,8 +542,10 @@ command so activated services such as dconf cannot fall back to the live session
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
 | `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
 | `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation assertions for both layouts |
-| `scripts/verify-ubuntu-vm.sh` | Host build, install, GDM restart, probe, and screenshot harness |
-| `scripts/verify-fedora-headless.sh` | Isolated headless upstream-layout probe with live-session guard |
+| `scripts/verify-qemu.sh` | Host orchestrator: cached cloud images, golden provisioning, disposable per-run overlays |
+| `scripts/qemu-guest-probe.sh` | In-guest isolated headless-Shell runner used by `verify-qemu.sh` |
+| `scripts/verify-ubuntu-vm.sh` | Legacy VirtualBox/GDM live-session harness |
+| `scripts/verify-fedora-headless.sh` | Legacy isolated headless upstream probe on the live host |
 | `LICENSE` | MIT license text |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |
@@ -530,8 +573,9 @@ command so activated services such as dconf cannot fall back to the live session
 ## Known Limitations
 
 1. **Private Shell APIs**: Grid discovery, reflow, icon updates, and persistence depend on
-   private GNOME Shell members. Capability checks prevent common partial failures, but every
-   supported Shell release still requires a smoke test.
+   private GNOME Shell members. Capability checks prevent common partial failures. Automated
+   QEMU acceptance covers Ubuntu 24.04 (GNOME 46), Ubuntu 26.04 (adaptive layout), and Fedora
+   44 (GNOME 50) headless; other Shell releases still require a smoke test.
 2. **Fixed icon size clips labels**: Icons smaller than the chosen size still render at the
    fixed size; very small icons may clip labels.
 3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new

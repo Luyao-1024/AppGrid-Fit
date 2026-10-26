@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 UUID=${EXTENSION_UUID:-appgrid-size@luyao}
-MONITOR=${MONITOR:-1280x800}
+MONITOR=${MONITOR:-1920x1080}
 TIMEOUT=${TIMEOUT:-300}
 WORK=$(mktemp -d /tmp/appgrid-fedora-headless.XXXXXX)
 EXT_DIR="$WORK/data/gnome-shell/extensions/$UUID"

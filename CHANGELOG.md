@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added an isolated QEMU acceptance harness with cached golden images and disposable per-run overlays, covering Ubuntu 24.04, Ubuntu 26.04 and Fedora 44 without touching the host desktop.
+- Pinned guest package installation to the Tsinghua mirror for both apt and dnf, with provisioning-time checks that fail if an active remaining source points upstream.
+- Defaulted the QEMU acceptance guest to a 1920×1080 virtual monitor, with `MONITOR` still available as an override.
+- Folder dialogs now use the configured icon size for their child icons instead of Shell's adaptive 64 px default, restore the original sizing on disable, and are covered by 32 px/96 px and disable-restoration QEMU assertions.
+- Enabled/disabled the extension through `Main.extensionManager` in the probe so headless runs no longer depend on the `gnome-extensions` D-Bus service.
+- Documented the golden-image cache, reset semantics and host dependencies, and added shell/Python syntax checks to CI.
+
 ## 1.3.4 — 2026-10-26
 
 - Rebuilt overflowing pages in their original order and mirrored the result into Shell's in-memory `PageManager`, so shrinking the grid no longer scrambles drag-and-drop app order on upstream GNOME Shell.

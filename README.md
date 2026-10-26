@@ -9,6 +9,7 @@ Current version: **1.3.4**
 - **4 preset levels**: Large (96px), Medium (64px), Small (48px), Tiny (32px)
 - **Balanced fit**: Presets calculate rows/columns from your screen and Shell's full app-tile size while using 80% of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
+- **Folder dialogs follow your icon size**: Child icons inside an opened folder use the configured icon size instead of Shell's adaptive default
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
 - **Persistent app order**: Keeps drag-and-drop positions stable across login even when a page contains more than Shell's default 24 apps
 - **Order-preserving reflow**: Shrinking the grid rebuilds overflow pages in their original order instead of letting Shell move items to the front of the next page
@@ -109,28 +110,53 @@ CI additionally builds the final ZIP, verifies its GNOME metadata, schema declar
 local imports, review-sensitive APIs, archive paths and contents, runs Shexli, and uploads
 the validated package as a workflow artifact.
 
-For live Ubuntu 26.04 verification, run the harness from a machine with the VM registered in
-VirtualBox, SSH key access, passwordless sudo, and GDM automatic login:
+## Automated compatibility verification
+
+`scripts/verify-qemu.sh` runs the compatibility probe in disposable QEMU guests, so the
+machine you use is never the test target:
 
 ```bash
-scripts/verify-ubuntu-vm.sh
-SKIP_RESTART=1 scripts/verify-ubuntu-vm.sh   # test already-installed files
+scripts/verify-qemu.sh                        # all cases
+scripts/verify-qemu.sh --case ubuntu-26.04
+scripts/verify-qemu.sh --rebuild-golden --case fedora-44
 ```
 
-The harness builds and installs the package, restarts the graphical session, enables Looking
-Glass unsafe mode, runs `scripts/vm-probe.py`, and saves overview/preferences screenshots to
-`/tmp/appgrid-vm`. Acceptance is the probe exit status; screenshots are diagnostic artifacts
-and do not need review on subsequent runs. Review them once when adding or changing a visual
-test case. See [docs/ubuntu-26.04-verification.md](docs/ubuntu-26.04-verification.md)
-for the covered checks and environment details.
+| Case | GNOME layout |
+| --- | --- |
+| `ubuntu-24.04` | upstream mode-based `IconGridLayout` |
+| `ubuntu-26.04` | Ubuntu adaptive `IconGridLayout` |
+| `fedora-44` | upstream mode-based `IconGridLayout` |
 
-For upstream GNOME Shell on Fedora, the headless harness needs no VM and does not touch the
-live desktop session:
+The first run downloads each cloud image from the Tsinghua mirror and provisions a golden
+image once (GNOME Shell, test user, dummy app grid). Later runs boot a throwaway qcow2
+overlay backed by that golden image and delete it afterwards, so the guest desktop, extension
+settings and app order always start clean. The cache lives under
+`${XDG_CACHE_HOME:-~/.cache}/appgrid-qemu` (`images/`, `golden/`, `keys/`, `runs/`, `logs/`).
+Guest package installation is also pinned to the Tsinghua mirror: Ubuntu's apt primary and
+security URIs are replaced before `package_update`, Fedora's release and update repositories
+drop their metalinks for Tsinghua base URLs, and provisioning fails if any active source
+still points elsewhere.
+
+Host requirements: x86_64 Linux, `qemu-system-x86_64`, `qemu-img`, `ssh`, `scp`,
+`ssh-keygen`, `curl`, `python3`, `timeout`, and one of `cloud-localds`, `genisoimage`,
+`mkisofs` or `xorriso`. KVM is used when available; otherwise QEMU falls back to TCG, which
+is much slower. The guest uses a 1920×1080 virtual monitor by default; set `MONITOR=WxH` to
+override it. Each run writes its serial log and probe output to
+`<cache>/logs/<timestamp>-<case>/`. Acceptance is the probe exit status. Use
+`--keep-overlay` to keep the throwaway disk for debugging.
+
+The guest Shell runs `--headless --wayland --no-x11 --unsafe-mode` under an isolated D-Bus
+and XDG session. `--no-x11` avoids a GVC/Xwayland startup deadlock when no display is
+available, and the isolated session keeps dconf, extension settings and app order out of the
+live desktop.
+
+The older live-session harnesses remain available for manual debugging but are not part of
+the default acceptance path:
 
 ```bash
+scripts/verify-ubuntu-vm.sh      # VirtualBox/GDM VM
 scripts/verify-fedora-headless.sh
 ```
 
-It runs the same probe against an isolated headless Shell and guards the live
-`enabled-extensions` and `app-picker-layout` settings against leakage. See the verification
-document for the isolation details and covered checks.
+See [docs/ubuntu-26.04-verification.md](docs/ubuntu-26.04-verification.md) for the covered
+checks and environment details.

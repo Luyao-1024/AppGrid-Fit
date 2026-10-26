@@ -1,2 +1,4 @@
 *.shell-extension.zip
 node_modules/
+__pycache__/
+*.pyc
