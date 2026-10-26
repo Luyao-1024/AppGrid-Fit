@@ -1,3 +1,5 @@
+import {FOLDER_DIALOG_PAGE_PADDING} from './config.js'
+
 const FIXED_DIMENSIONS = ['_fixedRows', '_fixedCols']
 const UNCONSTRAINED_SPACING = -1
 const ALIGN_START = 1
@@ -5,7 +7,10 @@ const ALIGN_CENTER = 2
 const FOLDER_DIALOG_BORDER_FALLBACK = 1
 const FOLDER_DIALOG_TITLE_FALLBACK = 60
 const FOLDER_PAGE_PADDING_FALLBACK = {
-    top: 24, right: 18, bottom: 24, left: 18,
+    top: FOLDER_DIALOG_PAGE_PADDING,
+    right: FOLDER_DIALOG_PAGE_PADDING,
+    bottom: FOLDER_DIALOG_PAGE_PADDING,
+    left: FOLDER_DIALOG_PAGE_PADDING,
 }
 
 export function readThemeSpacing(node) {
@@ -116,18 +121,14 @@ export function getFolderGrids(appDisplay) {
     return getFolderEntries(appDisplay).map(entry => entry.grid)
 }
 
-export function computeFolderContentDimensions(itemCount, rows, columns) {
-    const maxRows = Math.max(1, Math.trunc(rows) || 1)
-    const maxColumns = Math.max(1, Math.trunc(columns) || 1)
-    if (!Number.isInteger(itemCount) || itemCount <= 0)
-        return {rows: maxRows, columns: maxColumns, paged: false}
-    if (itemCount > maxRows * maxColumns)
-        return {rows: maxRows, columns: maxColumns, paged: true}
-    const usedColumns = Math.min(maxColumns, itemCount)
+export function computeFolderGridDimensions(itemCount, rows, columns) {
+    const gridRows = Math.max(1, Math.trunc(rows) || 1)
+    const gridColumns = Math.max(1, Math.trunc(columns) || 1)
     return {
-        rows: Math.ceil(itemCount / usedColumns),
-        columns: usedColumns,
-        paged: false,
+        rows: gridRows,
+        columns: gridColumns,
+        paged: Number.isInteger(itemCount) &&
+            itemCount > gridRows * gridColumns,
     }
 }
 
@@ -235,6 +236,43 @@ function folderPagePadding(grid, lm) {
     return FOLDER_PAGE_PADDING_FALLBACK
 }
 
+function hasPagePadding(lm) {
+    return 'page-padding' in lm || 'page_padding' in lm
+}
+
+function sameMargin(first, second) {
+    if (!first || !second)
+        return false
+    return ['top', 'right', 'bottom', 'left'].every(side =>
+        Number(first[side]) === Number(second[side]))
+}
+
+function applyFolderPagePadding(lm, paged, config, state) {
+    if (!hasPagePadding(lm))
+        return false
+    const desired = paged ? state?.pagePadding : config.pagePadding
+    if (!desired || sameMargin(lm.page_padding, desired))
+        return false
+    lm.page_padding = desired
+    return true
+}
+
+// Shell recomputes folder page padding from the navigation-arrow width on
+// every allocation, which leaves wide side margins on single-page folders.
+export function enforceFolderPagePadding(lm, padding) {
+    if (!lm || !padding || !hasPagePadding(lm) ||
+        !Array.isArray(lm._pages))
+        return false
+    const itemCount = lm._pages.reduce((count, page) =>
+        count + (page?.visibleChildren?.length ?? 0), 0)
+    const capacity = (lm.rows_per_page ?? 0) * (lm.columns_per_page ?? 0)
+    if (capacity <= 0 || itemCount > capacity ||
+        sameMargin(lm.page_padding, padding))
+        return false
+    lm.page_padding = padding
+    return true
+}
+
 function folderDialogBorder(dialog) {
     const fallback = {
         top: 0,
@@ -312,7 +350,7 @@ function folderDialogContentSize(dialog, grid, lm, dims, config) {
         cellSize,
         rowSpacing: config.rowSpacing,
         columnSpacing: config.columnSpacing,
-        pagePadding: folderPagePadding(grid, lm),
+        pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
         titleHeight: measureFolderTitleHeight(dialog),
         border: folderDialogBorder(dialog),
     })
@@ -332,16 +370,20 @@ function restoreFolderDialogSize(box, originals) {
     return true
 }
 
-export function applyFolderDialogSize(icon, config, originals = null) {
+export function applyFolderDialogSize(icon, config, originals = null,
+    folderOriginals = null) {
     const grid = icon?.view?._grid
     const lm = grid?.layout_manager
     if (!lm || !('fixed_icon_size' in lm))
         return null
 
+    const state = ensureFolderState(grid, folderOriginals)
     const itemCount = countFolderItems(grid)
-    const dims = computeFolderContentDimensions(itemCount, config.rows,
+    const dims = computeFolderGridDimensions(itemCount, config.rows,
         config.columns)
     let changed = applyFolderDimensions(grid, dims)
+    if (applyFolderPagePadding(lm, dims.paged, config, state))
+        changed = true
     syncFolderIconSize(grid, lm, config.iconSize)
 
     const dialog = icon?._dialog
@@ -392,10 +434,11 @@ export function applyFolderDialogSize(icon, config, originals = null) {
     return dims
 }
 
-export function applyFolderDialogSizes(appDisplay, config, originals = null) {
+export function applyFolderDialogSizes(appDisplay, config, originals = null,
+    folderOriginals = null) {
     for (const {icon} of getFolderEntries(appDisplay)) {
         if (icon?._dialog)
-            applyFolderDialogSize(icon, config, originals)
+            applyFolderDialogSize(icon, config, originals, folderOriginals)
     }
 }
 
@@ -459,9 +502,19 @@ function saveFolderState(grid) {
         iconSize: lm.fixed_icon_size,
         rowSpacing: lm.row_spacing || theme?.rowSpacing || 0,
         columnSpacing: lm.column_spacing || theme?.columnSpacing || 0,
+        pagePadding: hasPagePadding(lm) ? lm.page_padding : null,
         optional,
         layout,
     }
+}
+
+function ensureFolderState(grid, originals) {
+    if (!originals)
+        return null
+    const lm = grid.layout_manager
+    if (!originals.has(lm))
+        originals.set(lm, saveFolderState(grid))
+    return originals.get(lm)
 }
 
 function applyFolderAlignment(lm) {
@@ -481,18 +534,18 @@ export function applyFolderLayouts(appDisplay, config, originals,
         const lm = grid.layout_manager
         if (!('fixed_icon_size' in lm))
             continue
-        if (!originals.has(lm))
-            originals.set(lm, saveFolderState(grid))
-        const dims = computeFolderContentDimensions(countFolderItems(grid),
+        const state = ensureFolderState(grid, originals)
+        const dims = computeFolderGridDimensions(countFolderItems(grid),
             config.rows, config.columns)
         applyFolderDimensions(grid, dims)
+        applyFolderPagePadding(lm, dims.paged, config, state)
         lm.fixed_icon_size = config.iconSize
         lm.row_spacing = config.rowSpacing
         lm.column_spacing = config.columnSpacing
         applyFolderAlignment(lm)
         syncFolderIconSize(grid, lm, config.iconSize)
         if (icon?._dialog)
-            applyFolderDialogSize(icon, config, dialogOriginals)
+            applyFolderDialogSize(icon, config, dialogOriginals, originals)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()
@@ -511,6 +564,8 @@ export function restoreFolderLayouts(appDisplay, originals,
         lm.row_spacing = original.rowSpacing || theme?.rowSpacing || 0
         lm.column_spacing = original.columnSpacing ||
             theme?.columnSpacing || 0
+        if (original.pagePadding && hasPagePadding(lm))
+            lm.page_padding = original.pagePadding
         for (const [property, value] of Object.entries(original.optional ?? {})) {
             if (property in lm)
                 lm[property] = value

@@ -62,6 +62,7 @@ calculations used by both runtime and preferences code.
 | `FOLDER_MIN_DIMENSION` | `2` | Minimum folder dialog rows/columns |
 | `FOLDER_MAX_DIMENSION` | `6` | Maximum folder dialog rows/columns |
 | `FOLDER_MAX_SPACING` | `64` | Maximum folder dialog gap |
+| `FOLDER_DIALOG_PAGE_PADDING` | `24` | Uniform folder grid page padding on single-page folders |
 | `MAX_SNAPSHOTS` | `20` | Maximum saved layout snapshots (`snapshots.js`) |
 | `SNAPSHOT_VERSION` | `1` | Snapshot JSON schema version (`snapshots.js`) |
 
@@ -150,28 +151,35 @@ GNOME Shell creates a separate 3×3 `FolderGrid` for folder dialogs; it is not p
 `appDisplay._grid`, so it keeps its adaptive icon size by default. `_apply()` and the
 overview `shown` handler call `applyFolderLayouts()` for every
 `appDisplay._folderIcons[*].view._grid`. The helper stores icon size, spacing, alignment,
-CSS limits and the original mode/fixed dimensions in `_originalFolders` on first use, then
-sets the configured icon size, rows/columns, gaps, unconstrained spacing limits and
-START/CENTER alignment. `IconGridLayout.adaptToSize()` only re-evaluates the icon size after
-the page dimensions change, so the helper also clears `_pageWidth`/`_pageHeight` and queues a
-relayout. Ubuntu's adaptive layout derives spacing from `_iconSize`, so
-`_setupFolderEnforcers()` re-applies the configured row/column spacing and limits through
-`notify::*` handlers. Disable and partial-failure restoration put the original values back;
-when the captured spacing is zero (folder grids may not be styled yet), it falls back to the
-grid's CSS theme spacing.
+CSS limits, page padding and the original mode/fixed dimensions in `_originalFolders` on
+first use, then sets the configured icon size, rows/columns, gaps, unconstrained spacing
+limits and START/CENTER alignment. The configured rows and columns are always kept, even
+when the folder holds fewer apps: a 3×3 folder shows a 3×3 grid area with empty cells.
+`IconGridLayout.adaptToSize()` only re-evaluates the icon size after the page dimensions
+change, so the helper also clears `_pageWidth`/`_pageHeight` and queues a relayout. Ubuntu's
+adaptive layout derives spacing from `_iconSize`, so `_setupFolderEnforcers()` re-applies
+the configured row/column spacing and limits through `notify::*` handlers. Disable and
+partial-failure restoration put the original values back; when the captured spacing is zero
+(folder grids may not be styled yet), it falls back to the grid's CSS theme spacing.
 
-Folder dialogs also shrink to their content instead of keeping Shell's fixed 720×720 panel
+Folder dialogs also fit the configured grid instead of keeping Shell's fixed 720×720 panel
 (550 px on Ubuntu):
 
-- `computeFolderContentDimensions(itemCount, rows, columns)` uses only the rows and columns
-  that are in use while the items fit on one page: used columns are capped at the visible
-  item count and rows are `ceil(itemCount / usedColumns)`. Items that exceed the configured
-  capacity keep the full configured grid so paging and page indicators are unchanged.
-- `applyFolderDialogSize()` measures the largest item preferred size, reads
-  `page-padding-*` from the folder grid's theme node, measures the folder title's preferred
+- `computeFolderGridDimensions(itemCount, rows, columns)` always returns the configured rows
+  and columns; `paged` is true only when the item count exceeds that capacity. Empty cells
+  are left unused, and paging keeps Shell's page indicators and navigation arrows unchanged.
+- `applyFolderDialogSize()` measures the largest item preferred size, uses the configured
+  `FOLDER_DIALOG_PAGE_PADDING` (24 px on every side), measures the folder title's preferred
   height and writes an inline `width`/`height` style on the dialog's `.app-folder-dialog`
   box (`AppFolderDialog._viewBox`). The inline style overrides Shell's CSS size without
   replacing the dialog's background, padding or shadow.
+- Single-page folders use the uniform page padding, replacing Shell's wide navigation-arrow
+  side padding (for example 60 + 18 px on Ubuntu) that made the icon margins look
+  unbalanced. Shell recomputes folder page padding from the arrow width on every allocation
+  and theme change, so `_setupFolderEnforcers()` also re-applies the configured padding
+  through a `notify::page-padding` handler while the folder fits one page. Paged folders
+  keep Shell's original padding and default panel so arrows and page indicators still have
+  room; the original padding is restored on disable or when the folder grows beyond one page.
 - `_patchFolderOpen()` wraps each folder icon's `open()` method so the dialog is created and
   sized before Shell calls `popup()`. A `notify::allocation` handler on every folder grid
   schedules a post-layout pass, because label metrics and the title box are only final once
@@ -180,10 +188,11 @@ Folder dialogs also shrink to their content instead of keeping Shell's fixed 720
   the allocation/size feedback converges instead of looping.
 - The original inline style is saved in the `_originalFolderDialogs` WeakMap and restored
   when the extension is disabled, a partial apply fails, or the folder grows beyond one
-  page. `_folderOpenOriginals` stores each icon's original `open()` method for restoration.
+  page. `_folderPagePadding` is the shared `Clutter.Margin` applied to single-page folder
+  grids; `_folderOpenOriginals` stores each icon's original `open()` method for restoration.
 - Click handlers are deliberately not used: Shell and the probe can call `open()` directly.
-  The folder preview information label mentions the shrink-to-fit behavior; the drawing
-  still shows the configured maximum grid.
+  The folder preview information label mentions that the dialog fits the configured grid;
+  the drawing shows the full configured rows and columns, with empty cells dimmed.
 
 ### Application name visibility
 
@@ -315,7 +324,7 @@ enable()
   │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
-  │   ├─ _applyFolderLayouts()           — apply content-aware rows/columns/gaps and dialog size
+  │   ├─ _applyFolderLayouts()           — apply configured rows/columns/gaps, page padding and dialog size
   │   ├─ _setupFolderEnforcers()         — defend folder spacing against adaptive style resets
   │   ├─ _connectFolderSignals()         — apps-changed/destroy, patch open(), watch grid allocation
   │   ├─ _patchFolderOpen(icon)          — create and size the dialog before Shell popups it
@@ -348,7 +357,7 @@ _getControlsManager()  — Main.overview?._overview?._controls ?? null
 _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
 _applyFolderLayouts() / _restoreFolderLayouts() — apply or restore folder dialog grid layout
-_applyFolderDialogSize() / _applyFolderDialogSizes() — content-size existing folder dialogs
+_applyFolderDialogSize() / _applyFolderDialogSizes() — size existing folder dialogs to the configured grid
 _patchFolderOpen(icon) / _restoreFolderOpen(icon) — wrap or restore FolderIcon.open()
 _scheduleFolderDialogSize() / _cancelFolderDialogSize() — coalesce post-layout corrections
 _applyAppNameVisibility() / _restoreAppNameVisibility() — toggle icon labels
@@ -407,7 +416,7 @@ from the window's `close-request` signal. Every signal is disconnected from its 
 |---|---|
 | `createSpinRow(settings, key, title, {lower, upper, step, page})` | Creates an `Adw.SpinRow` with `Gtk.Adjustment`, binds to GSettings key |
 | `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, showNames}` |
-| `drawFolderPreviewSection(...)` | Draws the folder dialog preview with rows/columns/gaps/icon size and optional labels |
+| `drawFolderPreviewSection(...)` | Draws the full configured rows/columns (empty cells dimmed) with gaps, icon size, 24 px page padding and optional labels |
 | `captureSnapshot` / `restoreSnapshot` | Stores/restores GVariant settings, app-picker layout and folder definitions |
 | `refreshSnapshotRows` | Rebuilds the saved-layout ComboRow from `parseSnapshots()` |
 
@@ -573,8 +582,9 @@ restore capacity.
 
 The probe backs up and restores extension settings, `org.gnome.shell app-picker-layout`, and
 (when `TEST_FOLDER=1`) the temporary folder settings used for the 32 px/96 px folder-dialog
-checks, folder rows/columns/gaps, dialog content fit, app-name visibility in the grid and
-folder, folder paging/reflow, and the disable-restoration check. The paging check temporarily
+checks, configured rows/columns/gaps, uniform page padding and balanced side margins, dialog
+fit, app-name visibility in the grid and folder, folder paging/reflow, and the
+disable-restoration check. The paging check temporarily
 grows the folder to six apps, shrinks its capacity to 2×2, grows it back and restores the
 original app list. Acceptance is the probe exit status; a failing run copies the guest work
 directory and Shell log into `<cache>/logs/`, and the run overlay is still discarded unless

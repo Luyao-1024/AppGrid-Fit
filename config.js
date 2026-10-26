@@ -20,6 +20,7 @@ export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
 export const FOLDER_MIN_DIMENSION = 2
 export const FOLDER_MAX_DIMENSION = 6
 export const FOLDER_MAX_SPACING = 64
+export const FOLDER_DIALOG_PAGE_PADDING = 24
 
 export const PRESETS = [
     {iconSize: 96, rows: 4, columns: 6, gap: 24},
