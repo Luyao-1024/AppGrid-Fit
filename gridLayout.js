@@ -8,6 +8,9 @@ const FOLDER_DIALOG_BORDER_FALLBACK = 1
 const FOLDER_DIALOG_TITLE_FALLBACK = 60
 const FOLDER_TITLE_SIDE_INSET_FALLBACK = 36
 const FOLDER_TITLE_BUTTON_FALLBACK = 40
+const FOLDER_TITLE_FONT_FALLBACK = 26.666
+const FOLDER_TITLE_BUTTON_FONT_FALLBACK = 14.666
+const PANGO_SCALE = 1024
 const FOLDER_PAGE_PADDING_FALLBACK = {
     top: FOLDER_DIALOG_PAGE_PADDING,
     right: FOLDER_DIALOG_PAGE_PADDING,
@@ -305,11 +308,84 @@ function folderDialogBorder(dialog) {
 function measureFolderTitleHeight(dialog) {
     try {
         dialog?.ensure_style?.()
+        dialog?._entryBox?.ensure_style?.()
         const [height] = dialog?._entryBox?.get_preferred_height(-1) ?? []
         if (Number.isFinite(height) && height > 0)
             return Math.ceil(height)
     } catch (_error) {}
     return FOLDER_DIALOG_TITLE_FALLBACK
+}
+
+function readActorFontSize(actor) {
+    try {
+        actor?.ensure_style?.()
+        const size = actor?.get_theme_node?.()?.get_font?.()?.get_size?.()
+        if (Number.isFinite(size) && size > 0)
+            return size / PANGO_SCALE
+    } catch (_error) {}
+    return null
+}
+
+function folderDialogTitleState(dialog) {
+    const label = dialog?._folderNameLabel ?? null
+    const edit = dialog?._editButton ?? null
+    return {
+        label,
+        edit,
+        labelStyle: label?.get_style?.() ?? '',
+        entryStyle: dialog?._entry?.get_style?.() ?? '',
+        editStyle: edit?.get_style?.() ?? '',
+        labelFont: readActorFontSize(label),
+        editFont: readActorFontSize(edit),
+    }
+}
+
+function setActorStyle(actor, style) {
+    if (!actor?.set_style)
+        return false
+    const next = style ?? ''
+    if ((actor.get_style?.() ?? '') === next)
+        return false
+    actor.set_style(next)
+    actor.ensure_style?.()
+    return true
+}
+
+function titleFontStyle(baseStyle, size) {
+    const base = (baseStyle ?? '').trim()
+    return `${base ? `${base} ` : ''}font-size: ${size}px;`
+}
+
+function restoreFolderDialogTitle(original) {
+    const title = original?.title
+    if (!title)
+        return false
+    let changed = setActorStyle(title.label, title.labelStyle)
+    changed = setActorStyle(original?.entry, title.entryStyle) || changed
+    changed = setActorStyle(title.edit, title.editStyle) || changed
+    return changed
+}
+
+function applyFolderDialogTitle(original, titleSize) {
+    const title = original?.title
+    if (!title)
+        return false
+    const size = Number(titleSize)
+    if (!Number.isFinite(size) || size <= 0)
+        return restoreFolderDialogTitle(original)
+    const pixels = Math.max(1, Math.round(size))
+    const baseTitle = title.labelFont ?? FOLDER_TITLE_FONT_FALLBACK
+    const baseButton = title.editFont ??
+        FOLDER_TITLE_BUTTON_FONT_FALLBACK
+    const buttonPixels = Math.max(1,
+        Math.round(baseButton * pixels / baseTitle))
+    let changed = setActorStyle(title.label,
+        titleFontStyle(title.labelStyle, pixels))
+    changed = setActorStyle(original?.entry,
+        titleFontStyle(title.entryStyle, pixels)) || changed
+    changed = setActorStyle(title.edit,
+        titleFontStyle(title.editStyle, buttonPixels)) || changed
+    return changed
 }
 
 function reflowFolderPages(grid) {
@@ -347,19 +423,21 @@ function folderDialogContentSize(dialog, grid, lm, dims, config) {
     if (!cellSize)
         return null
     const border = folderDialogBorder(dialog)
-    return {
-        ...computeFolderDialogSize({
-            rows: dims.rows,
-            columns: dims.columns,
-            cellSize,
-            rowSpacing: config.rowSpacing,
-            columnSpacing: config.columnSpacing,
-            pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
-            titleHeight: measureFolderTitleHeight(dialog),
-            border,
-        }),
+    const size = computeFolderDialogSize({
+        rows: dims.rows,
+        columns: dims.columns,
+        cellSize,
+        rowSpacing: config.rowSpacing,
+        columnSpacing: config.columnSpacing,
+        pagePadding: config.pagePadding ?? folderPagePadding(grid, lm),
+        titleHeight: measureFolderTitleHeight(dialog),
         border,
-    }
+    })
+    // The title bar only adds height, so square grids would otherwise get a
+    // taller-than-wide panel. Match the width to make the background square.
+    if (dims.rows === dims.columns && size.width < size.height)
+        size.width = size.height
+    return {...size, border}
 }
 
 function fitFolderDialogTitle(dialog, size) {
@@ -391,6 +469,7 @@ function restoreFolderDialogSize(box, originals) {
         return false
     const original = originals.get(box)
     originals.delete(box)
+    restoreFolderDialogTitle(original)
     box.set_style?.(original?.style ?? '')
     if (Number.isFinite(original?.width) && Number.isFinite(original?.height)) {
         box.width = original.width
@@ -421,10 +500,8 @@ export function applyFolderDialogSize(icon, config, originals = null,
     const dialog = icon?._dialog
     const box = dialog?._viewBox
     if (box) {
-        const size = dims.paged
-            ? null
-            : folderDialogContentSize(dialog, grid, lm, dims, config)
-        if (size) {
+        let size = null
+        if (!dims.paged) {
             if (originals && !originals.has(box)) {
                 // Ubuntu's adaptive layout pins the panel to a fixed size,
                 // which only the actor dimensions can override.
@@ -435,8 +512,16 @@ export function applyFolderDialogSize(icon, config, originals = null,
                     width: fixed ? box.width : null,
                     height: fixed ? box.height : null,
                     entry: dialog?._entry ?? null,
+                    title: folderDialogTitleState(dialog),
                 })
             }
+            const titleOriginal = originals?.get(box)
+            if (titleOriginal &&
+                applyFolderDialogTitle(titleOriginal, config.titleSize))
+                changed = true
+            size = folderDialogContentSize(dialog, grid, lm, dims, config)
+        }
+        if (size) {
             const original = originals?.get(box)
             const baseStyle = (original?.style ?? '').trim()
             const style = `${baseStyle ? `${baseStyle} ` : ''}` +

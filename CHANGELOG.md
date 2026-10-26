@@ -4,7 +4,9 @@
 
 - Added GNOME Shell 51 support and a Fedora rawhide QEMU case that verifies the extension against GNOME Shell 51.1 without touching the host desktop.
 - Folder dialogs are now fully configurable: icon size follows the main grid, with independent rows, columns, row/column spacing, exact-gap alignment and CSS limit removal. The preferences window draws a dedicated folder-dialog preview and the probe checks 32 px/96 px child icons, configured dimensions/gaps and restoration on disable.
-- Folder dialogs now always show the configured rows × columns, even when a folder holds fewer apps, so a 3×3 folder keeps a 3×3 grid area. The panel fits that configured grid, keeps the folder name and edit button inside and centered, and uses uniform 24 px page padding on single-page folders, balancing icon margins instead of Shell's wide navigation-arrow side padding. Paged folders keep Shell's default panel and padding, and disabling the extension restores both.
+- Folder dialogs now always show the configured rows × columns, even when a folder holds fewer apps, so a 3×3 folder keeps a 3×3 grid area. The panel fits that configured grid, keeps the folder name and edit button inside and centered, and uses uniform 24 px page padding on single-page folders, balancing icon margins instead of Shell's wide navigation-arrow side padding. The title font size is configurable (20 px by default, 0 follows the theme), and the edit button scales with it. Square grids (3×3, 4×4 and similar) now use a square panel so the title bar no longer makes the background look taller than wide. Paged folders keep Shell's default panel and padding, and disabling the extension restores all of it.
+- Added a Simplified Chinese translation for the preferences UI and extension metadata using gettext. Packaging compiles `po/zh_CN.po` into `locale/zh_CN`, unit tests enforce full msgid coverage and placeholder integrity, and the QEMU probe verifies the packaged catalog loads and returns Chinese text.
+- Removed the legacy VirtualBox/GDM and live-host test harnesses. QEMU is now the only automated acceptance path, with `msgfmt` added to its host requirements.
 - Added a **Show application names** switch that hides labels under apps, folders and folder-dialog children; the main and folder previews omit label bars when disabled.
 - Added named layout snapshots: up to 20 saves of the grid settings, `app-picker-layout`, folder definitions and visibility settings, with a combo selector, confirmation before restore, and delete support.
 - Added an isolated QEMU acceptance harness with cached golden images and disposable per-run overlays, covering Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Fedora rawhide (GNOME 51) without touching the host desktop.
@@ -12,6 +14,7 @@
 - Defaulted the QEMU acceptance guest to a 1920×1080 virtual monitor, with `MONITOR` still available as an override.
 - Enabled/disabled the extension through `Main.extensionManager` in the probe so headless runs no longer depend on the `gnome-extensions` D-Bus service.
 - Documented the golden-image cache, reset semantics and host dependencies, and added shell/Python syntax checks to CI.
+- Rebuilt the preferences as a compact root menu with App grid, Folder dialog, Layout snapshots and Advanced subpages. Root rows summarize the current configuration, each subpage has a back header and its own scroll area, preset and custom grid controls share one group, and spacing collapses into an expander. The right preview follows the active page: App grid shows the live overview, Folder dialog shows a full folder-dialog preview with its title bar, grid, gaps, icon/title sizes and label state, and the other pages keep the overview.
 
 ## 1.3.4 — 2026-10-26
 

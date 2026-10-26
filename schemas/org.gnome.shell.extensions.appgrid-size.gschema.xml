@@ -78,6 +78,13 @@
       <summary>Folder dialog column spacing</summary>
     </key>
 
+    <key type="i" name="folder-title-size">
+      <default>20</default>
+      <range min="0" max="48"/>
+      <summary>Folder dialog title size</summary>
+      <description>Folder title font size in pixels; 0 follows the system theme.</description>
+    </key>
+
     <key type="b" name="show-app-names">
       <default>true</default>
       <summary>Show application names</summary>

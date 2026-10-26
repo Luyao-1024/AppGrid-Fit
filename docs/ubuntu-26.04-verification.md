@@ -49,71 +49,27 @@ pages. The cloud image uses the standard horizontal Dash; Ubuntu Dock is not ins
 Results on 2026-10-26 with QEMU 10.2.2/KVM, 2 vCPU, 4096 MiB, 1920×1080 virtual monitor and
 the extension built from this repository:
 
-- `ubuntu-24.04`: 87 checks passed.
-- `ubuntu-26.04`: 87 checks passed.
-- `fedora-44`: 87 checks passed.
-- `fedora-51`: 87 checks passed.
+- `ubuntu-24.04`: 97 checks passed.
+- `ubuntu-26.04`: 97 checks passed.
+- `fedora-44`: 97 checks passed.
+- `fedora-51`: 97 checks passed.
 
 The QEMU guest sets `TEST_FOLDER=1`. The probe creates a temporary folder from four dummy
 apps, opens it at 32 px and 96 px, and asserts that the folder dialog's child icons follow
 the configured size. It also verifies that the dialog keeps the configured 3×4 grid even
 though only four apps are present, that the panel width/height match the tile size, gaps and
-uniform 24 px page padding, that measured side margins are balanced instead of using Shell's
-wide navigation-arrow padding, that the folder name and edit button stay inside the centered
-title bar, that the panel shrinks when labels are hidden and grows back when they are shown,
-and that disabling the extension restores Shell's default panel size and padding. Folder
-settings are backed up and restored; legacy harnesses leave `TEST_FOLDER` unset and never
-touch folder settings.
+uniform 24 px page padding, that measured side margins are symmetric instead of using
+Shell's wide navigation-arrow padding, that the folder name and edit button stay inside the
+centered title bar, that the panel shrinks when labels are hidden and grows back when they
+are shown, and that disabling the extension restores Shell's default panel size and padding.
+A 14 px configured title is checked against the label and entry fonts, the edit button must
+scale with it, and setting 0 or disabling must restore the system title. A 3×3 configuration
+must produce a square panel. Folder settings are backed up and restored.
 
-The headless runs have 87 checks: the standard horizontal Dash emits two geometry checks
-instead of the live VM's three, and the QEMU guest adds twenty-four folder/name/dialog-fit
-checks. The legacy live VM runs 64 checks and the legacy Fedora headless harness runs 63
-because they do not enable `TEST_FOLDER`.
-
-## Environment (legacy live VM)
-
-- Ubuntu 26.04.1 LTS, GNOME Shell `50.1-0ubuntu1.2`, Wayland session.
-- VirtualBox 7.2.22, VMSVGA, 3D acceleration disabled.
-- Guest: 4 vCPUs, 6144 MiB RAM, 1280×800 display, 100% scaling.
-- Build: this repository at version 1.3.4 (metadata version 12).
-- Baseline layout: three pages with 13 apps, page consolidation disabled.
-
-## Legacy VirtualBox harness
-
-`scripts/verify-ubuntu-vm.sh` performs the whole verification cycle:
-
-1. Compiles schemas, builds the extension ZIP, and copies it plus the probe to the VM.
-2. Installs the package with `gnome-extensions install --force`.
-3. Restarts GDM and waits for the extension to report `State: ACTIVE`.
-4. Enables Looking Glass unsafe mode so the probe can call `org.gnome.Shell.Eval`.
-5. Runs `scripts/vm-probe.py`, restores the previous extension settings and app-picker
-   layout, and captures overview and preferences screenshots.
-
-The VM needs SSH key access, passwordless sudo for GDM restarts, GDM automatic login for the
-test user, and VirtualBox on the host. Defaults target `Ubuntu 26.04.1` at
-`127.0.0.1:2222`; override them with `VM_NAME`, `VM_HOST`, `VM_PORT`, `VM_USER`, and
-`VM_SSH_KEY`.
-
-```bash
-scripts/verify-ubuntu-vm.sh
-SKIP_RESTART=1 scripts/verify-ubuntu-vm.sh   # test already-installed files
-SCREENSHOT_DIR='' scripts/verify-ubuntu-vm.sh # skip screenshots
-```
-
-The probe backs up `dconf` settings for `org.gnome.shell.extensions.appgrid-size` and
-`org.gnome.shell app-picker-layout`, then restores them in a `finally` block. It also
-disables the temporary theme stylesheet, turns unsafe mode off, and re-enables the extension.
-
-## Legacy live VM results
-
-64 checks passed on repeated end-to-end runs, including a fresh package build plus GDM
-restart and subsequent `SKIP_RESTART=1` runs against the installed package. The extension
-publishes its settled preview snapshot 600 ms after the overview's `shown` signal, so
-page-indicator animation frames no longer leak transient coordinates into the preview. The
-probe also requires that settled snapshot to have the page indicator centered under the grid
-before any assertion runs. One earlier run hit a Shell apply stall longer than the probe's
-original 10-second wait during the consolidation step; the wait is now 20 seconds and timeout
-errors include the last snapshot, extension state, and overview visibility.
+The headless runs have 97 checks: the standard horizontal Dash emits two geometry checks,
+and the QEMU guest adds folder/title/square/name/dialog-fit checks plus four localization
+checks (declared gettext domain, packaged Chinese catalog, translated UI lookup, and
+placeholder preservation).
 
 ## Acceptance contract
 
@@ -147,42 +103,20 @@ human inspection.
 | App names | `show-app-names=false` hides labels in the main grid and folder dialog, and restores them when re-enabled |
 | Folder disable | Restores adaptive icon size, 3×3 dimensions, Shell's native symmetric spacing, page padding and the default panel size |
 
-Screenshots from the harness are stored in `/tmp/appgrid-vm/` by default
-(`app-grid.png`, `prefs.png`). The final overview shows Ubuntu's left dock, centered page
-dots, and the restored three-page order; the preferences preview shows the same measured
-page-indicator and dock positions instead of a horizontal fallback Dash.
-
-## Fedora headless verification
-
-`scripts/verify-fedora-headless.sh` runs the same probe against upstream GNOME Shell without
-touching the live desktop session:
-
-1. Builds the extension ZIP and unpacks it into a temporary `XDG_DATA_HOME`.
-2. Compiles the installed schema and installs a helper extension that enables Looking Glass
-   unsafe mode after AppGrid Fit is enabled.
-3. Starts `gnome-shell --headless --wayland` under `dbus-run-session` with isolated `HOME` and
-   XDG directories, then runs `scripts/vm-probe.py` with `EXPECTED_LAYOUT_MODE=modes` and
-   `FORCE_APP_GRID=1`.
-4. Compares live-session `org.gnome.shell enabled-extensions` and `app-picker-layout` before
-   and after the run, restoring them and failing if the isolated session leaked into them.
-
-63 checks pass on Fedora 44 with GNOME Shell 50.6. Headless Shell does not advance the overview
-animation, so the probe forces the app-grid adjustment after `showApps()`. The shrink-reflow
-test covers the order-preserving page rebuild and in-memory `PageManager` sync; without them,
-Shell inserts overflow at the start of the next page and a later redisplay scrambles app order.
+Screenshots are not an acceptance artifact. Acceptance is the probe exit status; a failing
+QEMU run copies the guest work directory and Shell log into `<cache>/logs/`.
 
 ## Known coverage limits
 
 - Ubuntu (adaptive `IconGridLayout`) and upstream Fedora (mode-based layout) are covered by the
-  live probes. Other distributions still need a smoke test because private Shell members vary.
+  QEMU probes. Other distributions still need a smoke test because private Shell members vary.
 - Theme verification loads a small custom stylesheet through `St.Theme`. Switching the whole
   system theme through GNOME Settings is still a manual check.
 - Mouse-drag ordering is not synthesized. Saved-order restoration is verified through Shell's
   `_savePages()` output and `app-picker-layout`, not by generating drag gestures.
-- The preferences window is not part of QEMU acceptance. Its construction and both previews
-  were smoke-tested locally under an isolated Xvfb session, and snapshot save/restore data
-  round-trips are covered by unit tests and an isolated GSettings check; Cairo pixels are not
-  asserted automatically.
+- The preferences window is not part of QEMU acceptance. Its construction, previews and
+  localization catalog are covered by unit tests and the packaged-catalog check; Cairo pixels
+  are not asserted automatically.
 - The `fedora-51` case uses Fedora's upstream rawhide image and the NJU package mirror because
   Tsinghua does not mirror rawhide. It verifies GNOME Shell 51.1 rather than a released
   Fedora 45 image.
@@ -205,10 +139,12 @@ properties, and restores the original mode array or fixed-property presence/valu
 
 ## Automated checks
 
-- `npm run check`: source syntax/policy validation and 44 unit tests.
+- `npm run check`: source syntax/policy validation and 56 unit tests, including full Chinese
+  catalog coverage and placeholder checks.
 - Strict schema validation and compiled-schema reproducibility.
-- Package validation with `npm run check:package -- <archive>`.
+- Package validation with `npm run check:package -- <archive>`; the package must contain
+  `locale/zh_CN/LC_MESSAGES/appgrid-size@luyao.mo`.
 - `scripts/verify-qemu.sh`: cached QEMU acceptance across Ubuntu 24.04, Ubuntu 26.04,
   Fedora 44 and Fedora rawhide (GNOME 51), with disposable per-run overlays.
-- Shexli was previously run clean on 0.2.1/tree-sitter 0.25.2; CI continues to run it on the
-  packaged artifact.
+- Shexli runs on the packaged artifact; CI applies a GNOME 51 version-cutoff patch to
+  Shexli 0.2.1 and still checks every other rule.

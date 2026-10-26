@@ -78,6 +78,23 @@ check(typeof metadata.value.url === 'string' &&
 check(typeof metadata.value['settings-schema'] === 'string' &&
     metadata.value['settings-schema'].length > 0,
     'metadata.json settings-schema must be a non-empty string')
+check(typeof metadata.value['gettext-domain'] === 'string' &&
+    metadata.value['gettext-domain'].length > 0,
+    'metadata.json gettext-domain must be a non-empty string')
+
+const gettextDomain = metadata.value['gettext-domain'] ?? ''
+const linguasPath = resolve(sourceDir, 'po', 'LINGUAS')
+const linguas = existsSync(linguasPath)
+    ? readText(linguasPath).split('\n').filter(Boolean)
+    : []
+check(linguas.length > 0, 'po/LINGUAS must list at least one language')
+for (const language of linguas) {
+    const poPath = resolve(sourceDir, 'po', `${language}.po`)
+    check(existsSync(poPath), `po/${language}.po is required by po/LINGUAS`)
+    if (existsSync(poPath))
+        check(readText(poPath).includes('\nmsgstr "'),
+            `po/${language}.po must contain translations`)
+}
 
 const schemaName = metadata.value['settings-schema'] ?? ''
 const schemaPath = resolve(sourceDir, 'schemas', `${schemaName}.gschema.xml`)
@@ -175,6 +192,8 @@ if (archivePath) {
         'prefs.js',
         'LICENSE',
         `schemas/${schemaName}.gschema.xml`,
+        ...linguas.map(language =>
+            `locale/${language}/LC_MESSAGES/${gettextDomain}.mo`),
         ...localImports,
     ]
     for (const entry of requiredEntries)

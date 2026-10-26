@@ -670,7 +670,10 @@ build_golden() {
 build_extension_zip() {
     local output=$1
     python3 - "$ROOT" "$output" <<'PY'
+import json
+import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 root, output = map(Path, sys.argv[1:])
@@ -680,9 +683,33 @@ schema = root / 'schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml'
 missing = [name for name in required if not (root / name).is_file()]
 if not schema.is_file():
     missing.append(str(schema))
+linguas_path = root / 'po/LINGUAS'
+if not linguas_path.is_file():
+    missing.append(str(linguas_path))
 if missing:
     raise SystemExit(f'missing packaging input: {missing}')
-with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+metadata = json.loads((root / 'metadata.json').read_text())
+domain = metadata.get('gettext-domain')
+if not domain:
+    raise SystemExit('metadata.json gettext-domain is required')
+languages = [
+    line.strip() for line in linguas_path.read_text().splitlines()
+    if line.strip()
+]
+if not languages:
+    raise SystemExit('po/LINGUAS is empty')
+with tempfile.TemporaryDirectory() as temp_dir, \
+        zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+    for language in languages:
+        po_path = root / 'po' / f'{language}.po'
+        if not po_path.is_file():
+            raise SystemExit(f'missing translation: {po_path}')
+        mo_path = Path(temp_dir) / f'{domain}.mo'
+        subprocess.run(
+            ['msgfmt', '--check', '-o', str(mo_path), str(po_path)],
+            check=True)
+        archive.write(
+            mo_path, f'locale/{language}/LC_MESSAGES/{domain}.mo')
     for name in required:
         archive.write(root / name, name)
     archive.write(schema, f'schemas/{schema.name}')

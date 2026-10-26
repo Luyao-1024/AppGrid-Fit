@@ -32,7 +32,7 @@ jobs:
       - name: Install GNOME packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gnome-shell libglib2.0-bin unzip
+          sudo apt-get install --yes gnome-shell libglib2.0-bin unzip gettext
 
       - name: Validate source and run tests
         run: npm run check
@@ -60,6 +60,8 @@ jobs:
           package_dir="$RUNNER_TEMP/package"
           mkdir -p "$package_dir"
           gnome-extensions pack --force \
+            --podir=po \
+            --gettext-domain=appgrid-size@luyao \
             --extra-source=config.js \
             --extra-source=gridPages.js \
             --extra-source=gridLayout.js \
