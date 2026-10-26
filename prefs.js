@@ -32,8 +32,15 @@ const SHELL_PAGE_PAD = 24;
 const PREVIEW_PADDING = 0;
 const DOCK_ICON_COUNT = 9;
 const SHELL_PREVIEW_GRID_TOP_INSET = 8;
+const CUSTOM_MIN_DIMENSION = 2;
+const CUSTOM_MAX_DIMENSION = 20;
 
 const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
+
+function clampCustomDimension(value) {
+    return Math.max(CUSTOM_MIN_DIMENSION,
+        Math.min(CUSTOM_MAX_DIMENSION, value));
+}
 
 function connectSignal(cleanupFns, object, signal, callback) {
     const id = object.connect(signal, callback);
@@ -316,11 +323,17 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
 }
 
 function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
-    dashRect, dashItems, pageCount, currentPage) {
-    const indicatorY = (dashRect ? fy + dashRect.y * sc : dY) - 50 * sc;
+    dashRect, dashItems, pageCount, currentPage,
+    pageIndicatorRect = null, gridBottomY = 0, dashVisible = null) {
     const visiblePageCount = Math.max(1, Math.min(8, pageCount));
     const indicatorGap = 32 * sc;
-    const indicatorStartX = fx + fW / 2 -
+    const indicatorY = pageIndicatorRect
+        ? fy + (pageIndicatorRect.y + pageIndicatorRect.height / 2) * sc
+        : fy + (gridBottomY + 8) * sc;
+    const indicatorCenterX = pageIndicatorRect
+        ? fx + (pageIndicatorRect.x + pageIndicatorRect.width / 2) * sc
+        : fx + fW / 2;
+    const indicatorStartX = indicatorCenterX -
         (visiblePageCount - 1) * indicatorGap / 2;
     for (let index = 0; index < visiblePageCount; index++) {
         const active = index === currentPage;
@@ -330,6 +343,9 @@ function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
             0, Math.PI * 2);
         cr.fill();
     }
+
+    if (dashVisible === false)
+        return;
 
     if (dashItems?.length) {
         const bounds = dashRect ?? dashItems.reduce((acc, rect) => ({
@@ -452,7 +468,13 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             for (const fn of cleanupFns) fn();
             return false;
         });
-        window.set_default_size(1200, 560);
+        const display = Gdk.Display.get_default();
+        const monitor = display?.get_monitors()?.get_item(0);
+        const monitorWidth = monitor?.get_geometry().width ?? 1280;
+        const monitorHeight = monitor?.get_geometry().height ?? 800;
+        window.set_default_size(
+            Math.max(760, Math.min(1200, monitorWidth - 80)),
+            Math.max(420, Math.min(560, monitorHeight - 120)));
 
         const page = new Adw.PreferencesPage({
             title: 'App Grid',
@@ -569,9 +591,15 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         customGroup.add(createSpinRow(settings, 'custom-icon-size',
             'Icon pixel size', {lower: 16, upper: 160, step: 8, page: 16}));
         customGroup.add(createSpinRow(settings, 'custom-rows',
-            'Rows per page', {lower: 2, upper: 20, step: 1, page: 2}));
+            'Rows per page', {
+                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
+                step: 1, page: 2,
+            }));
         customGroup.add(createSpinRow(settings, 'custom-columns',
-            'Columns per page', {lower: 2, upper: 20, step: 1, page: 2}));
+            'Columns per page', {
+                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
+                step: 1, page: 2,
+            }));
         customGroup.add(createSpinRow(settings, 'custom-row-spacing',
             'Row spacing (px)', {lower: 0, upper: 200, step: 2, page: 8}));
         customGroup.add(createSpinRow(settings, 'custom-column-spacing',
@@ -632,7 +660,15 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateInfo();
 
-        return {widget: leftBox, cleanupFns};
+        const controlsScroller = new Gtk.ScrolledWindow({
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            min_content_height: 420,
+            vexpand: true,
+        });
+        controlsScroller.set_child(leftBox);
+
+        return {widget: controlsScroller, cleanupFns};
     }
 
     _buildPreviewPane(settings, window) {
@@ -687,9 +723,21 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             css_classes: ['dim-label', 'caption'],
         });
 
+        const fitButton = new Gtk.Button({
+            label: '',
+            halign: Gtk.Align.CENTER,
+            css_classes: ['pill'],
+        });
+        fitButton.connect('clicked', () => {
+            settings.set_int('custom-rows', clampCustomDimension(ps.fitRows));
+            settings.set_int('custom-columns',
+                clampCustomDimension(ps.fitCols));
+        });
+
         rightBox.append(screenLabel);
         rightBox.append(previewClamp);
         rightBox.append(fitLabel);
+        rightBox.append(fitButton);
 
         const ps = {monitorW: 1920, monitorH: 1080};
         const shellSettings = Gio.Settings.new('org.gnome.shell');
@@ -843,10 +891,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 workspaceCount: runtimeLayout?.workspaceCount ?? 2,
                 pageCount: pageItemCounts.length,
                 currentPage,
-                dashRect: runtimeLayout?.settled
-                    ? runtimeLayout.dashRect ?? null : null,
-                dashItems: runtimeLayout?.settled
-                    ? runtimeLayout.dashItems ?? null : null,
+                gridBottom: runtimeLayout?.settled
+                    ? runtimeLayout.grid.y + runtimeLayout.grid.height
+                    : layout.iconAreaYPos + layout.iconAreaH,
+                pageIndicatorRect:
+                    runtimeLayout?.pageIndicatorRect ?? null,
+                dashRect: runtimeLayout?.dashRect ?? null,
+                dashVisible: runtimeLayout?.dashVisible ?? null,
+                dashItems: runtimeLayout?.dashItems ?? null,
                 monitorW: mW, monitorH: mH,
             });
             if (runtimeLayout?.panelRect)
@@ -882,6 +934,12 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 fitLabel.label = text;
             }
 
+            const targetRows = clampCustomDimension(fitRows);
+            const targetColumns = clampCustomDimension(fitCols);
+            fitButton.label = `Fit ${targetRows}×${targetColumns}`;
+            fitButton.visible = !usePresets &&
+                (rows !== targetRows || columns !== targetColumns);
+
             da.queue_draw();
         };
 
@@ -911,6 +969,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 gridItems,
                 measuredItems, searchRect, workspaceRects, workspaceCount,
                 dashRect, dashItems, pageCount, currentPage,
+                gridBottom, pageIndicatorRect, dashVisible,
             } = ps;
 
             const pad = PREVIEW_PADDING;
@@ -961,7 +1020,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             drawDashSection(cr, fx, fy, fW,
                 fy + dashY * sc, dashH * sc, sc,
-                dashRect, dashItems, pageCount, currentPage);
+                dashRect, dashItems, pageCount, currentPage,
+                pageIndicatorRect, gridBottom, dashVisible);
 
             cr.setDash([], 0);
         });

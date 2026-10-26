@@ -143,28 +143,62 @@ to find a compatible grid.
 `IconGrid.vfunc_style_changed()` resets spacing properties from CSS on theme switches.
 `_setupEnforcers()` connects `notify::*` handlers on all six properties listed in
 `ENFORCED_PROPERTIES`. When any property changes (including from CSS), the enforcer closure
-immediately restores the extension's value.
+immediately restores the extension's value. `_captureThemeDefaults()` refreshes the values
+used for restoration after each `St.ThemeContext` change.
 
 ### Page consolidation
 
 `consolidatePages()` walks `lm._pages` and calls `_fillItemVacancies()` to pull items from
 subsequent pages into earlier unfilled pages. This reduces empty pages when grid density
-increases. It only runs when `consolidate-pages` is enabled; the setting defaults to false
-because `_savePages()` permanently changes the user's application order.
+increases. It stops when the Shell reports no progress (same page count and no added items),
+so an unsupported `_fillItemVacancies()` cannot loop or claim a change. It only runs when
+`consolidate-pages` is enabled; the setting defaults to false because `_savePages()`
+permanently changes the user's application order.
 
-`reflowPages()` always detects pages above the configured capacity and calls `_updatePages()`
-to move surplus items forward before allocation. This prevents overflow when capacity shrinks.
+`reflowPages()` always detects pages above the configured capacity. It first calls
+`rebuildPagesInOrder()`, which temporarily enables `allowIncompletePages`, removes every item,
+and re-adds them page by page in their existing order. Shell's `_updatePages()` fallback is used
+only when the private add/remove APIs are unavailable, because Shell's `_relocateSurplusItems()`
+inserts overflow at the start of the next page and scrambles the order. `reflowPages()` returns
+whether pages changed; `syncPageManagerPages()` then mirrors the rebuilt pages into
+`AppDisplay._pageManager._pages` so a later `_redisplay()` cannot reintroduce Shell's saved
+boundaries. `rebuildPagesInOrder()` restores the previous `allowIncompletePages` value, including
+GObject prototype properties, after the rebuild.
 
 On first apply for a layout manager, `restorePersistedPageOrder()` temporarily gives each page
 enough capacity for all visible items and calls `AppDisplay._redisplay()`. Shell initially loads
 saved layouts with its default 24-item capacity, which can reverse the overflow tail by inserting
 each extra item at the start of the next page. Restoring from `PageManager` before reflow keeps
-drag-and-drop order stable across login when the extension uses a larger capacity.
+drag-and-drop order stable across login when the extension uses a larger capacity. When the
+adaptive layout exposes `_fixedRows`/`_fixedCols`, the temporary capacity pins them too and
+restores their original presence and values afterward.
 
 ### Overview re-apply
 
 Connected to `Main.overview` `'showing'` signal so layout is re-applied each time the
-overview opens — handles cases where GNOME Shell resets layout between shows.
+overview opens — handles cases where GNOME Shell resets layout between shows. `'shown'`
+schedules a settled publish after `SETTLE_PUBLISH_DELAY_MS` (600 ms) so page-indicator and
+other actor animations have finished. The timer sets `_overviewShown = true` only when the
+grid exists and publishes with `settled: true`. `'hiding'` cancels the timer and clears the
+flag. While the overview is visible, every apply marks geometry unsettled and reschedules the
+timer, so the snapshot only becomes settled after layout changes stop. The allocation watcher
+publishes with `_overviewShown` instead of unconditionally marking geometry settled.
+
+### Theme-aware restoration
+
+`St.ThemeContext` `'changed'` marks `_themeChanged` and schedules an apply. On the next apply,
+`_captureThemeDefaults()` re-reads `row-spacing`, `column-spacing`, `max-row-spacing`, and
+`max-column-spacing` from the grid theme node via `readThemeSpacing()`. Upstream layouts restore
+all four values on disable; Ubuntu's adaptive layout derives spacing from `_iconSize`, so only
+its CSS limits are captured there. Restoration also calls `_syncIconSize(lm,
+original.effectiveIconSize)` so adaptive spacing is derived from the original icon size rather
+than the last fixed size used by the extension.
+
+### Settings coalescing
+
+Settings, allocation, monitor, and theme changes all use `_scheduleApply()`, a single
+`GLib.idle_add` slot. Rapid changes therefore produce one apply. Missing grids and unsupported
+layout APIs warn once per failure streak via `_warnOnce()`.
 
 ### Force-relayout
 
@@ -205,35 +239,44 @@ export const PRESETS = [
 enable()
   ├─ _resetState()          — initialize original values, signal IDs, allocation state
   ├─ _connectSettings()     — connect changed:: for each SETTINGS_KEYS
+  ├─ _connectTheme()        — re-read theme spacing on St.ThemeContext changes
   ├─ _apply()
-  │   ├─ _saveOriginalValues(lm, grid)   — first-run: snapshot defaults into _original
+  │   ├─ _saveOriginalValues(lm, grid)   — first-run: snapshot defaults + effective icon size
+  │   ├─ _captureThemeDefaults(grid)     — after a theme change: refresh spacing/limits
   │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
   │   ├─ restorePersistedPageOrder(...)   — first-run: rebuild order saved before Shell's 24-item split
-  │   ├─ reflowPages(lm, {consolidate})  — move overflow; optionally fill vacancies
+  │   ├─ reflowPages(lm, {consolidate})  — rebuild overflow in order; optionally fill vacancies
+  │   ├─ syncPageManagerPages(...)       — mirror rebuilt page boundaries in memory
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
-  ├─ Main.overview.connect('showing')
-  ├─ Main.overview.connect('shown')       — publish settled preview geometry
+  ├─ Main.overview.connect('showing')     — cancel settle timer, mark unsettled, apply
+  ├─ Main.overview.connect('shown')       — schedule settled publish (600 ms)
+  ├─ Main.overview.connect('hiding')      — cancel settle timer, clear settled state
   └─ Main.layoutManager.connect('monitors-changed')
 
 disable()
   ├─ _cancelScheduledApply()
   ├─ _disconnectOverview()
   ├─ _disconnectMonitorsChanged()
+  ├─ _disconnectTheme()
   ├─ _disconnectSettings()  — disconnect + null _settings
   ├─ _disconnectGridBindings() — disconnect allocation + notify handlers
-  ├─ _restoreOriginalLayout() — restore saved _original values, then _forceRelayout
+  ├─ _restoreOriginalLayout() — restore saved _original values, sync icon size, reflow, relayout
   └─ _resetState()
 
+_scheduleApply()       — coalesce settings/theme/allocation changes into one idle apply
+_scheduleSettledPublish() / _cancelSettledPublish() — debounce the settled preview snapshot
+_warnOnce(message)     — log each missing/unsupported-grid message until the next success
 _getControlsManager()  — Main.overview?._overview?._controls ?? null
 _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
 ```
 
 Original layout values are stored in `this._original` for the current layout manager and
-restored on disable or after a partial apply failure.
+restored on disable or after a partial apply failure. The snapshot includes
+`effectiveIconSize` (`lm._iconSize`) for adaptive layouts without `_findBestIconSize()`.
 
 ---
 
@@ -243,13 +286,15 @@ restored on disable or after a partial apply failure.
 
 The prefs window uses a horizontal `Gtk.Paned` inside a single `Adw.PreferencesRow`.
 `findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1400 so both panes
-receive their natural width. Default window size: 1200×560.
+receive their natural width. The default window size is monitor-aware: 760–1200 wide and
+420–560 tall. The controls pane is wrapped in a `Gtk.ScrolledWindow` with automatic vertical
+scrolling so short displays can still reach every row.
 
 ```
 fillPreferencesWindow(window)
   └─ paned (Gtk.Paned, horizontal, position 420)
-       ├─ _buildControlsPane(settings) → {widget: controlsBox, cleanupFns[]}
-       │    └─ controlsBox (Gtk.Box, vertical, margin 24/16)
+       ├─ _buildControlsPane(settings) → {widget: controlsScroller, cleanupFns[]}
+       │    └─ controlsScroller (Gtk.ScrolledWindow) → controlsBox (Gtk.Box, vertical, margin 24/16)
        │         ├─ modeGroup    — "Use preset sizes" SwitchRow
        │         ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
        │         ├─ customGroup  — 5 SpinRows + info label (visible when preset=false)
@@ -259,7 +304,8 @@ fillPreferencesWindow(window)
                  ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
                  ├─ Adw.Clamp → AspectFrame → previewFrame (Cairo grid preview, css 'card')
                  │    └─ DrawingArea — draws overview preview via section functions
-                 └─ fitLabel   — grid/balanced-fit stats
+                 ├─ fitLabel   — grid/balanced-fit stats
+                 └─ fitButton  — applies the clamped balanced-fit rows/columns
 ```
 
 `fillPreferencesWindow` collects cleanup functions from both panes and invokes them once
@@ -298,7 +344,7 @@ iconAreaH = pageH - 2×SHELL_PAGE_PAD
 | `drawMiniWsSection(...)` | Measured or calibrated workspace thumbnails |
 | `drawGridSection(...)` | Estimated icon grid with occupied, overflow, and empty states |
 | `drawMeasuredGridSection(...)` | Live app tiles, inner icon rectangles, and labels |
-| `drawDashSection(...)` | Compact Dash, measured items, and page indicators |
+| `drawDashSection(...)` | Page indicators plus measured Dash items; vertical/side docks follow measured item rectangles and `dashVisible` |
 
 All section functions receive scaled coordinates from the main draw callback.
 
@@ -313,8 +359,12 @@ fitRows = max(MIN_GRID_DIMENSION, floor((iconAreaH + rowGap) / (cellSize + rowGa
 
 When available, the preview uses `runtime-preview-layout`, which the extension updates with
 the live monitor, grid allocation, page padding, current-page item count, item IDs, and measured actor
-rectangles for every visible app tile and icon, the search entry, workspace thumbnails, and
-Dash items. Settled actor geometry is captured while the overview is visible, so opening the
+rectangles for every visible app tile and icon, the search entry, workspace thumbnails,
+page indicators, Dash items, and Dash visibility. `dashVisible` and `pageIndicatorRect` are
+consumed even when `settled` is false so Ubuntu's left-side dock and vertical layout show
+correctly before the overview settles. The version-2 snapshot also carries a `diagnostics`
+object (`mode`, API capabilities, dimensions, icon size, spacing, limits, alignment) used by
+the VM probe. Settled actor geometry is captured while the overview is visible, so opening the
 overview once after changing the layout gives the preferences preview exact Shell positions.
 The runtime snapshot includes Shell's preferred tile size after every icon-size change, so
 fallback placement remains accurate for presets, arbitrary custom sizes, themes, and font
@@ -332,7 +382,9 @@ remain stable across redraws without repeating in row or column bands.
 In preset mode, the preview draws cells using balanced-fit values (`fitRows×fitCols`). In
 custom mode, it draws the user's configured `rows×columns` with overflow cells in red. Empty
 capacity is dimmed, and the visible icon uses `iconSize` while cell placement continues to use
-the same measured or fallback tile size used by runtime fitting.
+the same measured or fallback tile size used by runtime fitting. A `Fit R×C` button appears
+when the custom grid differs from the clamped estimate; pressing it writes the suggested rows
+and columns back to GSettings.
 
 **Monitor detection** prefers the monitor containing the preferences window, falls back to
 the first display monitor, and finally to 1920×1080.
@@ -377,6 +429,46 @@ gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
 gnome-extensions enable appgrid-size@luyao
 ```
 
+### Ubuntu compatibility verification
+
+```bash
+scripts/verify-ubuntu-vm.sh
+SKIP_RESTART=1 scripts/verify-ubuntu-vm.sh   # already-installed files
+SCREENSHOT_DIR='' scripts/verify-ubuntu-vm.sh # no screenshots
+```
+
+The host script builds and installs the package, restarts GDM, enables Looking Glass unsafe
+mode with VirtualBox keyboard automation, runs `scripts/vm-probe.py` inside the guest, and
+captures `/tmp/appgrid-vm/app-grid.png` and `prefs.png`. The probe currently runs 64 checks
+against Ubuntu's adaptive layout: presets, custom grids, reflow, disable/re-enable, theme
+spacing and limits, page-indicator/dock geometry, consolidation, and saved page order.
+Its waits require a settled snapshot whose page indicator is already centered under the grid,
+so animation frames cannot cause transient geometry failures.
+Acceptance is the probe exit status; screenshots are diagnostic artifacts and only need a
+one-time review when adding or changing a visual test case. The probe requires
+`GSETTINGS_SCHEMA_DIR` pointing at the installed extension's `schemas/` and a session D-Bus
+address (defaults to the current UID's bus). It backs up and restores extension settings and
+`org.gnome.shell app-picker-layout`.
+
+GNOME Shell caches extension ESM modules: disabling/enabling does not load changed files.
+Restart the graphical session (the script does this) after installing a new build.
+
+### Fedora / upstream headless verification
+
+```bash
+scripts/verify-fedora-headless.sh
+```
+
+The harness builds the package into a temporary `HOME` and XDG tree, starts
+`gnome-shell --headless --wayland` under `dbus-run-session`, installs the extension plus a
+helper that enables unsafe mode, and runs the same probe with
+`EXPECTED_LAYOUT_MODE=modes FORCE_APP_GRID=1`. Because headless Shell does not advance the
+overview animation, the probe forces the app-grid adjustment after `showApps()`. The probe
+passes 63 checks against the mode-based layout. The script snapshots and restores
+`org.gnome.shell enabled-extensions` and `app-picker-layout`, and fails if the isolated run
+changes live-session settings. All XDG variables must be set on the `dbus-run-session`
+command so activated services such as dconf cannot fall back to the live session.
+
 ---
 
 ## Code Conventions
@@ -408,11 +500,15 @@ gnome-extensions enable appgrid-size@luyao
 | `tests/*.test.js` | Node unit tests for shared calculations and page reflow |
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
 | `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
+| `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation assertions for both layouts |
+| `scripts/verify-ubuntu-vm.sh` | Host build, install, GDM restart, probe, and screenshot harness |
+| `scripts/verify-fedora-headless.sh` | Isolated headless upstream-layout probe with live-session guard |
 | `LICENSE` | MIT license text |
 | `metadata.json` | UUID, name, description, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |
 | `schemas/gschemas.compiled` | Compiled schema (generated, do not edit) |
 | `docs/grid-allocation.md` | GNOME Shell 50 app grid layout allocation analysis (source code reference) |
+| `docs/ubuntu-26.04-verification.md` | Ubuntu adaptive-layout verification results and harness usage |
 | `README.md` | User-facing documentation |
 | `CHANGELOG.md` | Release history |
 | `AGENTS.md` | Developer / AI agent reference (this file) |

@@ -1,5 +1,23 @@
 const FIXED_DIMENSIONS = ['_fixedRows', '_fixedCols']
 
+export function readThemeSpacing(node) {
+    if (!node || typeof node.get_length !== 'function' ||
+        typeof node.lookup_length !== 'function')
+        return null
+
+    const [hasMaxRowSpacing, maxRowSpacing] =
+        node.lookup_length('max-row-spacing', false)
+    const [hasMaxColumnSpacing, maxColumnSpacing] =
+        node.lookup_length('max-column-spacing', false)
+
+    return {
+        rowSpacing: node.get_length('row-spacing'),
+        columnSpacing: node.get_length('column-spacing'),
+        maxRowSpacing: hasMaxRowSpacing ? maxRowSpacing : -1,
+        maxColumnSpacing: hasMaxColumnSpacing ? maxColumnSpacing : -1,
+    }
+}
+
 export function getGridLayoutMode(grid) {
     const lm = grid?.layout_manager
     if (!lm || !['fixed_icon_size', 'rows_per_page', 'columns_per_page']

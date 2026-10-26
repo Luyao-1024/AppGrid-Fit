@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
     getGridLayoutMode,
+    readThemeSpacing,
     restoreGridLayout,
     saveGridLayout,
     setGridDimensions,
@@ -114,6 +115,30 @@ test('restoration preserves explicitly undefined adaptive properties', () => {
     assert.equal(Object.hasOwn(lm, '_fixedRows'), true)
     assert.equal(lm._fixedRows, undefined)
     assert.equal(Object.hasOwn(lm, '_fixedCols'), false)
+})
+
+test('theme spacing uses CSS values and unconstrained limits', () => {
+    const values = {
+        'row-spacing': 50,
+        'column-spacing': 60,
+    }
+    const node = {
+        get_length: name => values[name] ?? 0,
+        lookup_length: name => name === 'max-row-spacing'
+            ? [true, 70]
+            : [false, 0],
+    }
+    assert.deepEqual(readThemeSpacing(node), {
+        rowSpacing: 50,
+        columnSpacing: 60,
+        maxRowSpacing: 70,
+        maxColumnSpacing: -1,
+    })
+})
+
+test('theme spacing rejects nodes without style lookups', () => {
+    assert.equal(readThemeSpacing(null), null)
+    assert.equal(readThemeSpacing({}), null)
 })
 
 test('incomplete or broken layout APIs are rejected before applying', () => {
