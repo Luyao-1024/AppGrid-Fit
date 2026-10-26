@@ -87,3 +87,45 @@ export function restoreGridLayout(grid, saved) {
         }
     }
 }
+
+export function getFolderGrids(appDisplay) {
+    const icons = appDisplay?._folderIcons
+    if (!Array.isArray(icons))
+        return []
+    const grids = []
+    for (const icon of icons) {
+        const grid = icon?.view?._grid
+        if (grid?.layout_manager && !grids.includes(grid))
+            grids.push(grid)
+    }
+    return grids
+}
+
+export function setFolderIconSizes(appDisplay, iconSize, originals) {
+    for (const grid of getFolderGrids(appDisplay)) {
+        const lm = grid.layout_manager
+        if (!('fixed_icon_size' in lm))
+            continue
+        if (!originals.has(lm))
+            originals.set(lm, lm.fixed_icon_size)
+        if (lm.fixed_icon_size === iconSize)
+            continue
+        lm.fixed_icon_size = iconSize
+        lm._pageWidth = 0
+        lm._pageHeight = 0
+        grid.queue_relayout()
+    }
+}
+
+export function restoreFolderIconSizes(appDisplay, originals) {
+    for (const grid of getFolderGrids(appDisplay)) {
+        const lm = grid.layout_manager
+        if (!originals.has(lm))
+            continue
+        lm.fixed_icon_size = originals.get(lm)
+        lm._pageWidth = 0
+        lm._pageHeight = 0
+        grid.queue_relayout()
+    }
+    originals.clear()
+}

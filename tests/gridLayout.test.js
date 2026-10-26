@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+    getFolderGrids,
     getGridLayoutMode,
     readThemeSpacing,
+    restoreFolderIconSizes,
     restoreGridLayout,
     saveGridLayout,
+    setFolderIconSizes,
     setGridDimensions,
 } from '../gridLayout.js'
 
@@ -155,4 +158,69 @@ test('incomplete or broken layout APIs are rejected before applying', () => {
     const incomplete = adaptiveGrid()
     delete incomplete.layout_manager._updatePages
     assert.equal(getGridLayoutMode(incomplete), null)
+})
+
+function folderGrid(originalSize) {
+    return {
+        layout_manager: {
+            fixed_icon_size: originalSize,
+            _iconSize: 64,
+            _pageWidth: 548,
+            _pageHeight: 476,
+        },
+        relayouts: 0,
+        queue_relayout() {
+            this.relayouts += 1
+        },
+    }
+}
+
+test('folder grids follow the configured icon size and restore', () => {
+    const first = folderGrid(-1)
+    const second = folderGrid(-1)
+    const appDisplay = {
+        _folderIcons: [
+            {view: {_grid: first}},
+            {view: {_grid: second}},
+            {view: {_grid: first}},
+            {view: {}},
+            {},
+        ],
+    }
+    const originals = new Map()
+
+    assert.deepEqual(getFolderGrids(appDisplay), [first, second])
+    assert.deepEqual(getFolderGrids(null), [])
+
+    setFolderIconSizes(appDisplay, 32, originals)
+    for (const grid of [first, second]) {
+        assert.equal(grid.layout_manager.fixed_icon_size, 32)
+        assert.equal(grid.layout_manager._pageWidth, 0)
+        assert.equal(grid.layout_manager._pageHeight, 0)
+        assert.equal(grid.relayouts, 1)
+    }
+    assert.deepEqual([...originals.values()], [-1, -1])
+
+    setFolderIconSizes(appDisplay, 96, originals)
+    for (const grid of [first, second])
+        assert.equal(grid.layout_manager.fixed_icon_size, 96)
+    assert.deepEqual([...originals.values()], [-1, -1])
+    assert.equal(first.relayouts, 2)
+
+    restoreFolderIconSizes(appDisplay, originals)
+    for (const grid of [first, second]) {
+        assert.equal(grid.layout_manager.fixed_icon_size, -1)
+        assert.equal(grid.layout_manager._pageWidth, 0)
+        assert.equal(grid.layout_manager._pageHeight, 0)
+    }
+    assert.equal(originals.size, 0)
+    assert.equal(first.relayouts, 3)
+})
+
+test('folder grids without fixed icon sizing are left alone', () => {
+    const grid = {layout_manager: {}, queue_relayout() {}}
+    const originals = new Map()
+    setFolderIconSizes({_folderIcons: [{view: {_grid: grid}}]}, 32, originals)
+    assert.equal(originals.size, 0)
+    restoreFolderIconSizes({_folderIcons: [{view: {_grid: grid}}]}, originals)
 })

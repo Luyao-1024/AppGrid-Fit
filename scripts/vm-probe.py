@@ -13,6 +13,18 @@ UUID = os.environ.get('EXTENSION_UUID', 'appgrid-size@luyao')
 SCHEMA = 'org.gnome.shell.extensions.appgrid-size'
 LAYOUT_MODE = os.environ.get('EXPECTED_LAYOUT_MODE', 'adaptive')
 FORCE_APP_GRID = os.environ.get('FORCE_APP_GRID') == '1'
+TEST_FOLDER = os.environ.get('TEST_FOLDER') == '1'
+FOLDER_ID = 'appgrid-probe-folder'
+FOLDER_NAME = 'AppGrid Probe Folder'
+FOLDER_SCHEMA = (
+    'org.gnome.desktop.app-folders.folder:'
+    f'/org/gnome/desktop/app-folders/folders/{FOLDER_ID}/')
+FOLDER_APPS = [
+    'appgrid-test-10.desktop',
+    'appgrid-test-11.desktop',
+    'appgrid-test-12.desktop',
+    'appgrid-test-13.desktop',
+]
 HOME = Path.home()
 DATA_HOME = Path(os.environ.get('XDG_DATA_HOME', HOME / '.local/share'))
 EXTENSION_DIR = DATA_HOME / 'gnome-shell/extensions' / UUID
@@ -63,6 +75,21 @@ def gs_set(key, value):
     if isinstance(value, bool):
         value = 'true' if value else 'false'
     output(['gsettings', 'set', SCHEMA, key, str(value)])
+
+
+def gs_get_at(schema, key):
+    return output(['gsettings', 'get', schema, key])
+
+
+def gs_set_at(schema, key, value):
+    output(['gsettings', 'set', schema, key, str(value)])
+
+
+def parse_strv(raw):
+    raw = raw.strip()
+    if raw.startswith('@as '):
+        raw = raw[4:].strip()
+    return ast.literal_eval(raw)
 
 
 def wait_for(predicate, description, timeout=10, interval=0.4):
@@ -175,24 +202,35 @@ def flattened(pages):
     return [item for page in pages for item in page]
 
 
+def extension_state():
+    return eval_js(f'''
+const extension = Main.extensionManager.lookup({json.dumps(UUID)});
+JSON.stringify({{
+    state: extension?.state ?? null,
+    error: extension?.error ?? null,
+}});
+''')
+
+
 def extension_info():
-    return output(['gnome-extensions', 'info', UUID])
+    return extension_state()
 
 
 def extension_active():
-    return 'ACTIVE' in extension_info()
-
-
-def extension_enabled():
-    listed = output(['gnome-extensions', 'list', '--enabled'])
-    return UUID in listed.splitlines()
+    return extension_state().get('state') == 1
 
 
 def set_extension_enabled(enabled):
-    output(['gnome-extensions', 'enable' if enabled else 'disable', UUID])
-    wait_for(
-        lambda: extension_enabled() == enabled,
-        f'extension enabled={enabled}', timeout=8)
+    action = 'enableExtension' if enabled else 'disableExtension'
+    eval_js(f'Main.extensionManager.{action}({json.dumps(UUID)}); 1')
+    if enabled:
+        wait_for(
+            lambda: extension_state().get('state') == 1,
+            'extension enabled', timeout=8)
+    else:
+        wait_for(
+            lambda: extension_state().get('state') != 1,
+            'extension disabled', timeout=8)
 
 
 def wait_for_config(icon_size, rows, columns):
@@ -254,6 +292,115 @@ def close_apps():
         eval_js('Main.overview.hide()')
     except Exception:
         pass
+
+
+def folder_state():
+    return eval_js(f'''
+const appDisplay = Main.overview._overview._controls.appDisplay;
+const folder = appDisplay._folderIcons.find(
+    icon => icon._id === {json.dumps(FOLDER_ID)});
+const grid = folder?.view?._grid;
+const lm = grid?.layout_manager;
+JSON.stringify({{
+    found: !!folder,
+    open: folder?._dialog?.visible ?? false,
+    fixedIconSize: lm?.fixed_icon_size ?? null,
+    effectiveIconSize: lm?._iconSize ?? null,
+    rows: lm?.rows_per_page ?? null,
+    columns: lm?.columns_per_page ?? null,
+    childIcons: grid
+        ? [...grid].map(child => child.icon?.iconSize ?? null)
+        : [],
+}});
+''')
+
+
+def open_test_folder():
+    eval_js(f'''
+const appDisplay = Main.overview._overview._controls.appDisplay;
+const folder = appDisplay._folderIcons.find(
+    icon => icon._id === {json.dumps(FOLDER_ID)});
+if (!folder)
+    throw new Error('probe folder not found');
+folder.open();
+''')
+
+
+def close_test_folder():
+    try:
+        eval_js(f'''
+const appDisplay = Main.overview._overview._controls.appDisplay;
+const folder = appDisplay._folderIcons.find(
+    icon => icon._id === {json.dumps(FOLDER_ID)});
+folder?._dialog?.popdown();
+''')
+    except Exception:
+        pass
+
+
+def folder_settings_backup():
+    raw_children = gs_get_at(
+        'org.gnome.desktop.app-folders', 'folder-children')
+    existed = FOLDER_ID in parse_strv(raw_children)
+    return {
+        'raw_children': raw_children,
+        'existed': existed,
+        'name': gs_get_at(FOLDER_SCHEMA, 'name') if existed else None,
+        'apps': gs_get_at(FOLDER_SCHEMA, 'apps') if existed else None,
+    }
+
+
+def create_test_folder(backup):
+    gs_set_at(FOLDER_SCHEMA, 'name', FOLDER_NAME)
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(FOLDER_APPS))
+    if not backup['existed']:
+        children = parse_strv(backup['raw_children'])
+        children.append(FOLDER_ID)
+        gs_set_at('org.gnome.desktop.app-folders', 'folder-children',
+            str(children))
+
+
+def restore_test_folder(backup):
+    if backup['existed']:
+        gs_set_at(FOLDER_SCHEMA, 'name', backup['name'])
+        gs_set_at(FOLDER_SCHEMA, 'apps', backup['apps'])
+    else:
+        for key in ('name', 'apps'):
+            run(['gsettings', 'reset', FOLDER_SCHEMA, key])
+    gs_set_at('org.gnome.desktop.app-folders', 'folder-children',
+        backup['raw_children'])
+
+
+def check_folder_icon_sizes():
+    for size in (32, 96):
+        gs_set('custom-icon-size', size)
+        wait_for_config(size, 2, 3)
+        open_test_folder()
+        state = wait_for(
+            lambda: (state := folder_state()) and
+                state.get('open') and
+                state.get('effectiveIconSize') == size and
+                len(state.get('childIcons') or []) == len(FOLDER_APPS) and
+                all(icon == size for icon in state['childIcons']) and
+                state,
+            f'folder grid at {size}px')
+        check(f'folder child icons follow {size}px setting',
+            state['effectiveIconSize'] == size and
+            all(icon == size for icon in state['childIcons']), state)
+        time.sleep(0.5)
+
+    set_extension_enabled(False)
+    restored = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('fixedIconSize') == -1 and
+            (state.get('effectiveIconSize') or 0) > 0 and
+            state,
+        'folder adaptive size restoration')
+    check('folder restores adaptive size on disable',
+        restored['fixedIconSize'] == -1, restored)
+    set_extension_enabled(True)
+    wait_for_config(96, 2, 3)
+    close_test_folder()
 
 
 def check_theme_layout(css_row, css_column, css_max_row, css_max_column):
@@ -339,10 +486,6 @@ def check_overview_geometry(layout):
 
 
 def main():
-    if not extension_active():
-        print('Extension is not ACTIVE; enable it before running the probe')
-        return 2
-
     EVAL_SCRIPT.write_text(
         '#!/bin/bash\n'
         f'export DBUS_SESSION_BUS_ADDRESS={shlex.quote(BUS_ADDRESS)}\n'
@@ -357,6 +500,10 @@ def main():
     except Exception as error:
         print(f'Shell Eval is unavailable: {error}')
         print('Enable Looking Glass unsafe mode before running the probe')
+        return 2
+
+    if not extension_active():
+        print('Extension is not ACTIVE; enable it before running the probe')
         return 2
 
     settings_backup = output([
@@ -609,6 +756,24 @@ JSON.stringify({
             check('saved layout setting restored',
                 restored_picker == live_picker,
                 {'expected': live_picker, 'actual': restored_picker})
+
+        if TEST_FOLDER:
+            folder_backup = folder_settings_backup()
+            try:
+                create_test_folder(folder_backup)
+                open_apps()
+                wait_for(lambda: folder_state().get('found'),
+                    'probe folder icon')
+                close_test_folder()
+                gs_set('use-presets', False)
+                gs_set('custom-rows', 2)
+                gs_set('custom-columns', 3)
+                gs_set('custom-icon-size', 32)
+                wait_for_config(32, 2, 3)
+                check_folder_icon_sizes()
+            finally:
+                close_test_folder()
+                restore_test_folder(folder_backup)
     finally:
         if theme_loaded:
             try:

@@ -21,8 +21,10 @@ import {
 import {
     getGridLayoutMode,
     readThemeSpacing,
+    restoreFolderIconSizes,
     restoreGridLayout,
     saveGridLayout,
+    setFolderIconSizes,
     setGridDimensions,
 } from './gridLayout.js'
 
@@ -49,6 +51,7 @@ export default class AppGridSizeExtension extends Extension {
             })
         this._overviewShownId = Main.overview.connect('shown', () => {
             this._overviewShowing = false
+            this._applyFolderIconSizes()
             this._scheduleSettledPublish()
         })
         this._overviewHidingId =
@@ -76,6 +79,7 @@ export default class AppGridSizeExtension extends Extension {
     _resetState() {
         this._settings = null
         this._original = null
+        this._originalFolders = new Map()
         this._activeConfig = null
         this._applied = false
         this._notifyIds = []
@@ -573,6 +577,17 @@ export default class AppGridSizeExtension extends Extension {
         lm.page_halign = Clutter.ActorAlign.CENTER
     }
 
+    _applyFolderIconSizes() {
+        if (!this._applied || !this._activeConfig)
+            return
+        setFolderIconSizes(this._getAppDisplay(), this._activeConfig.iconSize,
+            this._originalFolders)
+    }
+
+    _restoreFolderIconSizes() {
+        restoreFolderIconSizes(this._getAppDisplay(), this._originalFolders)
+    }
+
     _setupEnforcers(lm) {
         if (this._enforcerLayoutManager === lm)
             return
@@ -652,6 +667,7 @@ export default class AppGridSizeExtension extends Extension {
             const consolidate = this._settings.get_boolean('consolidate-pages')
             this._activeConfig = {...config, consolidate}
             this._applyLayout(grid, lm, config)
+            this._applyFolderIconSizes()
             this._setupEnforcers(lm)
 
             if (this._restoredOrderLayoutManager !== lm &&
@@ -693,6 +709,7 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _restoreOriginalLayout() {
+        this._restoreFolderIconSizes()
         if (!this._applied || !this._original)
             return
 

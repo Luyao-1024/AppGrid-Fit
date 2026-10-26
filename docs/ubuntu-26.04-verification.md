@@ -2,7 +2,64 @@
 
 Verified on 2026-10-26 for AppGrid Fit 1.3.4.
 
-## Environment
+## Automated QEMU acceptance (default)
+
+`scripts/verify-qemu.sh` runs the same probe inside disposable QEMU guests, so the host
+desktop is never the test target. The first run downloads cloud images from the Tsinghua
+mirror and provisions one golden image per case; later runs boot a fresh qcow2 overlay
+backed by the golden image and delete it afterwards, so extension settings and app order
+always start clean. The cache is `${XDG_CACHE_HOME:-~/.cache}/appgrid-qemu`.
+
+Guest package installation also uses the Tsinghua mirror. Ubuntu's cloud-init `apt` section
+sets the primary and security URIs before `package_update`; Fedora's boot command replaces
+the `fedora`, `fedora-updates` and `fedora-updates-testing` metalinks with Tsinghua base URLs
+and disables the unmirrored Cisco OpenH264 repository. Provisioning then verifies all active
+apt sources and those three Fedora repositories, failing instead of proceeding from an
+upstream mirror.
+
+| Case | Guest | Layout |
+| --- | --- | --- |
+| `ubuntu-24.04` | Ubuntu 24.04 cloud image, GNOME Shell 46 | upstream mode-based `IconGridLayout` |
+| `ubuntu-26.04` | Ubuntu 26.04 cloud image, GNOME Shell 50.1 | Ubuntu adaptive `IconGridLayout` |
+| `fedora-44` | Fedora 44 Cloud, GNOME Shell 50 | upstream mode-based `IconGridLayout` |
+
+The guest runs `gnome-shell --headless --wayland --no-x11 --unsafe-mode` under its own
+`dbus-run-session` and XDG tree. `--no-x11` is required: otherwise libgvc synchronously
+connects to Xwayland before the compositor can service it and wedges the Shell main loop.
+Unsafe mode lets the probe use `org.gnome.Shell.Eval`; extension enable/disable checks also
+go through `Main.extensionManager`, avoiding the external `gnome-extensions` D-Bus service.
+Before enabling the extension, the guest verifies that
+`Main.layoutManager.primaryMonitor` matches the requested `MONITOR`. `HOME`, `XDG_*`,
+`GSETTINGS_SCHEMA_DIR` and `DISPLAY=:999` are exported before `dbus-run-session` so dconf
+and other activated services use the isolated configuration.
+
+The guest preconfigures a 2×3 custom grid before enabling the extension. The app-picker
+layout captured at probe start therefore uses the same 6-item page capacity it is restored
+with later; restoring a larger-capacity layout at 2×3 lets Shell's `_redisplay()` scramble
+positions that overflow the page.
+
+Cloud images have no desktop applications, so provisioning creates 48 dummy entries and
+pins nine as favorites. The app grid starts with 39 non-favorite items at 2×3, i.e. seven
+pages. The cloud image uses the standard horizontal Dash; Ubuntu Dock is not installed.
+
+Results on 2026-10-26 with QEMU 10.2.2/KVM, 2 vCPU, 4096 MiB, 1920×1080 virtual monitor and
+the extension built from this repository:
+
+- `ubuntu-24.04`: 66 checks passed.
+- `ubuntu-26.04`: 66 checks passed.
+- `fedora-44`: 66 checks passed.
+
+The QEMU guest sets `TEST_FOLDER=1`. The probe creates a temporary folder from four dummy
+apps, opens it at 32 px and 96 px, and asserts that the folder dialog's child icons follow
+the configured size. It also disables the extension while the folder is open and verifies
+the grid returns to Shell's adaptive sizing. Folder settings are backed up and restored;
+legacy harnesses leave `TEST_FOLDER` unset and never touch folder settings.
+
+The headless runs have 66 checks: the standard horizontal Dash emits two geometry checks
+instead of the live VM's three, and the QEMU guest adds three folder-dialog checks. The
+legacy live VM runs 64 checks and the legacy Fedora headless harness runs 63.
+
+## Environment (legacy live VM)
 
 - Ubuntu 26.04.1 LTS, GNOME Shell `50.1-0ubuntu1.2`, Wayland session.
 - VirtualBox 7.2.22, VMSVGA, 3D acceleration disabled.
@@ -10,7 +67,7 @@ Verified on 2026-10-26 for AppGrid Fit 1.3.4.
 - Build: this repository at version 1.3.4 (metadata version 12).
 - Baseline layout: three pages with 13 apps, page consolidation disabled.
 
-## Automated harness
+## Legacy VirtualBox harness
 
 `scripts/verify-ubuntu-vm.sh` performs the whole verification cycle:
 
@@ -36,7 +93,7 @@ The probe backs up `dconf` settings for `org.gnome.shell.extensions.appgrid-size
 `org.gnome.shell app-picker-layout`, then restores them in a `finally` block. It also
 disables the temporary theme stylesheet, turns unsafe mode off, and re-enables the extension.
 
-## Live guest results
+## Legacy live VM results
 
 64 checks passed on repeated end-to-end runs, including a fresh package build plus GDM
 restart and subsequent `SKIP_RESTART=1` runs against the installed package. The extension
@@ -123,8 +180,10 @@ properties, and restores the original mode array or fixed-property presence/valu
 
 ## Automated checks
 
-- `npm run check`: source syntax/policy validation and 38 unit tests.
+- `npm run check`: source syntax/policy validation and 40 unit tests.
 - Strict schema validation and compiled-schema reproducibility.
 - Package validation with `npm run check:package -- <archive>`.
+- `scripts/verify-qemu.sh`: cached QEMU acceptance across Ubuntu 24.04, Ubuntu 26.04 and
+  Fedora 44, with disposable per-run overlays.
 - Shexli was previously run clean on 0.2.1/tree-sitter 0.25.2; CI continues to run it on the
   packaged artifact.
