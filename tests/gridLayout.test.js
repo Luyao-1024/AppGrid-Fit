@@ -468,6 +468,39 @@ test('paged folders keep the configured dialog grid and Shell padding', () => {
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
 })
 
+test('paged folders leave Shell page padding untouched', () => {
+    const grid = contentFolderGrid(4, 100)
+    const dialog = contentFolderDialog(80)
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+        pagePadding: PAGE_PADDING,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    const lm = grid.layout_manager
+    assert.deepEqual(lm.page_padding, PAGE_PADDING)
+
+    lm.page_padding = {top: 24, right: 60, bottom: 24, left: 60}
+    lm._pages = [
+        {visibleChildren: Array.from({length: 5}, () => ({}))},
+        {visibleChildren: Array.from({length: 5}, () => ({}))},
+    ]
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.deepEqual(lm.page_padding, {top: 24, right: 60, bottom: 24, left: 60})
+    assert.equal(dialog._viewBox.style, '')
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+    assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
+})
+
 test('folder dimension changes reflow stale pages', () => {
     const item = () => ({
         visible: true,

@@ -247,10 +247,10 @@ function sameMargin(first, second) {
         Number(first[side]) === Number(second[side]))
 }
 
-function applyFolderPagePadding(lm, paged, config, state) {
-    if (!hasPagePadding(lm))
+function applyFolderPagePadding(lm, paged, config) {
+    if (paged || !hasPagePadding(lm))
         return false
-    const desired = paged ? state?.pagePadding : config.pagePadding
+    const desired = config.pagePadding
     if (!desired || sameMargin(lm.page_padding, desired))
         return false
     lm.page_padding = desired
@@ -377,12 +377,12 @@ export function applyFolderDialogSize(icon, config, originals = null,
     if (!lm || !('fixed_icon_size' in lm))
         return null
 
-    const state = ensureFolderState(grid, folderOriginals)
+    ensureFolderState(grid, folderOriginals)
     const itemCount = countFolderItems(grid)
     const dims = computeFolderGridDimensions(itemCount, config.rows,
         config.columns)
     let changed = applyFolderDimensions(grid, dims)
-    if (applyFolderPagePadding(lm, dims.paged, config, state))
+    if (applyFolderPagePadding(lm, dims.paged, config))
         changed = true
     syncFolderIconSize(grid, lm, config.iconSize)
 
@@ -534,11 +534,11 @@ export function applyFolderLayouts(appDisplay, config, originals,
         const lm = grid.layout_manager
         if (!('fixed_icon_size' in lm))
             continue
-        const state = ensureFolderState(grid, originals)
+        ensureFolderState(grid, originals)
         const dims = computeFolderGridDimensions(countFolderItems(grid),
             config.rows, config.columns)
         applyFolderDimensions(grid, dims)
-        applyFolderPagePadding(lm, dims.paged, config, state)
+        applyFolderPagePadding(lm, dims.paged, config)
         lm.fixed_icon_size = config.iconSize
         lm.row_spacing = config.rowSpacing
         lm.column_spacing = config.columnSpacing

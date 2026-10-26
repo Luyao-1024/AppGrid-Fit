@@ -178,8 +178,9 @@ Folder dialogs also fit the configured grid instead of keeping Shell's fixed 720
   unbalanced. Shell recomputes folder page padding from the arrow width on every allocation
   and theme change, so `_setupFolderEnforcers()` also re-applies the configured padding
   through a `notify::page-padding` handler while the folder fits one page. Paged folders
-  keep Shell's original padding and default panel so arrows and page indicators still have
-  room; the original padding is restored on disable or when the folder grows beyond one page.
+  keep Shell's default padding and panel so arrows and page indicators still have room;
+  Shell recomputes that padding during allocation, and the captured padding is restored on
+  disable.
 - `_patchFolderOpen()` wraps each folder icon's `open()` method so the dialog is created and
   sized before Shell calls `popup()`. A `notify::allocation` handler on every folder grid
   schedules a post-layout pass, because label metrics and the title box are only final once
