@@ -58,7 +58,7 @@ export function removeSnapshot(snapshots, id) {
     return snapshots.filter(snapshot => snapshot.id !== id)
 }
 
-export function snapshotLabel(snapshot) {
+export function snapshotLabel(snapshot, gettext = value => value) {
     const summary = snapshot?.summary ?? {}
     const parts = []
     if (Number.isFinite(summary.iconSize))
@@ -67,7 +67,7 @@ export function snapshotLabel(snapshot) {
         parts.push(`${summary.rows}×${summary.columns}`)
     if (Number.isFinite(summary.folderRows) &&
         Number.isFinite(summary.folderColumns))
-        parts.push(`folder ${summary.folderRows}×${summary.folderColumns}`)
-    parts.push(summary.showNames ? 'names' : 'no names')
+        parts.push(`${gettext('folder')} ${summary.folderRows}×${summary.folderColumns}`)
+    parts.push(summary.showNames ? gettext('names') : gettext('no names'))
     return parts.join(' · ')
 }

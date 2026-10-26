@@ -63,6 +63,11 @@ calculations used by both runtime and preferences code.
 | `FOLDER_MAX_DIMENSION` | `6` | Maximum folder dialog rows/columns |
 | `FOLDER_MAX_SPACING` | `64` | Maximum folder dialog gap |
 | `FOLDER_DIALOG_PAGE_PADDING` | `24` | Uniform folder grid page padding on single-page folders |
+| `FOLDER_TITLE_SIDE_INSET_FALLBACK` | `36` | Folder title bar side padding fallback (`gridLayout.js`) |
+| `FOLDER_TITLE_BUTTON_FALLBACK` | `40` | Folder title edit/ghost button width fallback (`gridLayout.js`) |
+| `FOLDER_TITLE_FONT_FALLBACK` | `26.666` | Folder title font size when the theme is not ready (`gridLayout.js`) |
+| `FOLDER_TITLE_BUTTON_FONT_FALLBACK` | `14.666` | Folder edit button font size fallback (`gridLayout.js`) |
+| `PANGO_SCALE` | `1024` | Pango units per font unit for theme font measurement (`gridLayout.js`) |
 | `MAX_SNAPSHOTS` | `20` | Maximum saved layout snapshots (`snapshots.js`) |
 | `SNAPSHOT_VERSION` | `1` | Snapshot JSON schema version (`snapshots.js`) |
 
@@ -168,11 +173,17 @@ Folder dialogs also fit the configured grid instead of keeping Shell's fixed 720
 - `computeFolderGridDimensions(itemCount, rows, columns)` always returns the configured rows
   and columns; `paged` is true only when the item count exceeds that capacity. Empty cells
   are left unused, and paging keeps Shell's page indicators and navigation arrows unchanged.
-- `applyFolderDialogSize()` measures the largest item preferred size, uses the configured
-  `FOLDER_DIALOG_PAGE_PADDING` (24 px on every side), measures the folder title's preferred
-  height and writes an inline `width`/`height` style on the dialog's `.app-folder-dialog`
-  box (`AppFolderDialog._viewBox`). The inline style overrides Shell's CSS size without
-  replacing the dialog's background, padding or shadow.
+- `applyFolderDialogSize()` applies the configured title font first, measures the largest
+  item preferred size, uses the configured `FOLDER_DIALOG_PAGE_PADDING` (24 px on every
+  side), measures the folder title's preferred height and writes an inline `width`/`height`
+  style on the dialog's `.app-folder-dialog` box (`AppFolderDialog._viewBox`). The inline
+  style overrides Shell's CSS size without replacing the dialog's background, padding or
+  shadow.
+- Square grids (`rows === columns`, such as 3×3 and 4×4) use a square panel. The title bar
+  only adds height, so the panel would otherwise be taller than the grid. The helper
+  widens the panel to the content height; the grid page stays centered with its 24 px page
+  padding, and the extra width becomes symmetric side breathing room. Rectangular grids
+  keep their natural content width, and paged folders keep Shell's default square panel.
 - Single-page folders use the uniform page padding, replacing Shell's wide navigation-arrow
   side padding (for example 60 + 18 px on Ubuntu) that made the icon margins look
   unbalanced. Shell recomputes folder page padding from the arrow width on every allocation
@@ -181,19 +192,35 @@ Folder dialogs also fit the configured grid instead of keeping Shell's fixed 720
   keep Shell's default padding and panel so arrows and page indicators still have room;
   Shell recomputes that padding during allocation, and the captured padding is restored on
   disable.
+- Shell's folder-name entry has a fixed `12em` CSS width, which made the title bar wider than
+  a compact panel: the folder name drifted off-center and the edit button overflowed the
+  panel. `fitFolderDialogTitle()` sizes `dialog._entry.width` from the panel content width
+  minus the measured title-bar insets and the ghost/edit buttons, so both stay inside and the
+  name remains centered. Long names ellipsize in the label and stay editable in the entry.
+  The entry width returns to automatic sizing when the folder is paged or restored.
+- `folder-title-size` (px, default 20, `0` follows the system theme) is applied by
+  `applyFolderDialogTitle()` before the panel is measured. It reads the original label and
+  edit-button font sizes from their theme nodes (Pango units / 1024), sets inline
+  `font-size` on `_folderNameLabel` and `_entry`, and scales the edit button's font by the
+  same ratio. The edit button's `0.818em` padding and `1.091em` icon size therefore grow
+  or shrink with the title, and the ghost button's bound size keeps the title centered.
+  Original inline styles are captured with the dialog record and restored on disable,
+  paging, or when the setting is 0.
 - `_patchFolderOpen()` wraps each folder icon's `open()` method so the dialog is created and
   sized before Shell calls `popup()`. A `notify::allocation` handler on every folder grid
   schedules a post-layout pass, because label metrics and the title box are only final once
   the dialog has been allocated. Both paths call `applyFolderDialogSize()`, which compares
   the generated style and dimensions and queues a relayout only when something changed, so
   the allocation/size feedback converges instead of looping.
-- The original inline style is saved in the `_originalFolderDialogs` WeakMap and restored
-  when the extension is disabled, a partial apply fails, or the folder grows beyond one
-  page. `_folderPagePadding` is the shared `Clutter.Margin` applied to single-page folder
-  grids; `_folderOpenOriginals` stores each icon's original `open()` method for restoration.
+- The original inline styles, dimensions and title fonts are saved in the
+  `_originalFolderDialogs` WeakMap and restored when the extension is disabled, a partial
+  apply fails, or the folder grows beyond one page. `createFolderPagePadding()` builds the
+  uniform margin on demand for single-page folder grids; `_folderOpenOriginals` stores each
+  icon's original `open()` method for restoration.
 - Click handlers are deliberately not used: Shell and the probe can call `open()` directly.
-  The folder preview information label mentions that the dialog fits the configured grid;
-  the drawing shows the full configured rows and columns, with empty cells dimmed.
+  The preferences Folder dialog page shows a full folder preview in the right pane; its
+  caption states capacity, gap, icon size, title size and label visibility, and the drawing
+  shows the full configured rows and columns, with empty cells dimmed.
 
 ### Application name visibility
 
@@ -322,7 +349,7 @@ enable()
   ├─ _apply()
   │   ├─ _saveOriginalValues(lm, grid)   — first-run: snapshot defaults + effective icon size
   │   ├─ _captureThemeDefaults(grid)     — after a theme change: refresh spacing/limits
-  │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
+  │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit, folderTitleSize}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
   │   ├─ _applyFolderLayouts()           — apply configured rows/columns/gaps, page padding and dialog size
@@ -383,30 +410,53 @@ overrides.
 The prefs window uses a horizontal `Gtk.Paned` inside a single `Adw.PreferencesRow`.
 `findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1400 so both panes
 receive their natural width. The default window size is monitor-aware: 760–1200 wide and
-420–560 tall. The controls pane is wrapped in a `Gtk.ScrolledWindow` with automatic vertical
-scrolling so short displays can still reach every row.
+420–560 tall.
+
+The left pane is a `Gtk.Stack` with slide transitions. Its root page is a short navigation
+menu, so users click into a category instead of scrolling through every setting; each
+subpage has a back header and its own scroller, and the right preview pane stays outside the
+stack and visible on every page. The root rows show a live summary of the current
+configuration. Preset and custom grid rows swap inside the App grid page, and row/column
+spacing collapses into `Adw.ExpanderRow` controls. The right pane is also a `Gtk.Stack`: the
+overview preview stays for the root, App grid, Layout snapshots and Advanced pages, while the
+Folder dialog page switches it to a full folder-dialog preview.
 
 ```
 fillPreferencesWindow(window)
   └─ paned (Gtk.Paned, horizontal, position 420)
-       ├─ _buildControlsPane(settings, window) → {widget: controlsScroller, cleanupFns[]}
-       │    └─ controlsScroller (Gtk.ScrolledWindow) → controlsBox (Gtk.Box, vertical, margin 24/16)
-       │         ├─ modeGroup    — "Use preset sizes" SwitchRow
-       │         ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
-       │         ├─ customGroup  — 5 SpinRows + info label (visible when preset=false)
-       │         ├─ folderGroup  — 4 folder SpinRows + capacity/gap/label info
-       │         ├─ folderPreviewGroup — card with folderDa (folder dialog preview)
-       │         ├─ behaviorGroup — app-name switch + optional page consolidation
-       │         └─ snapshotsGroup — name entry, save row, saved-layout ComboRow,
-       │              restore/delete buttons, status label
-       └─ _buildPreviewPane(settings) → {widget: previewScroller, cleanupFns[]}
-            └─ previewScroller (Gtk.ScrolledWindow) → rightBox (Gtk.Box, vertical, margin 24/16)
-                 ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
-                 ├─ Adw.Clamp → AspectFrame → previewFrame (Cairo grid preview, css 'card')
-                 │    └─ DrawingArea — draws overview preview via section functions
-                 ├─ fitLabel   — grid/balanced-fit stats
-                 └─ fitButton  — applies the clamped balanced-fit rows/columns
+       ├─ _buildPreviewPane(settings, window) → {widget: previewScroller, cleanupFns[], setPage}
+       │    └─ previewScroller (Gtk.ScrolledWindow) → previewRoot
+       │         └─ previewStack (Gtk.Stack, CROSSFADE)
+       │              ├─ overviewPage — screenLabel, Adw.Clamp → AspectFrame →
+       │              │                   previewFrame (Cairo grid, css 'card'),
+       │              │                   fitLabel, fitButton
+       │              └─ folderPage   — folderLabel ("Folder dialog preview · R × C"),
+       │                                  Adw.Clamp → AspectFrame → folderFrame
+       │                                  (Cairo folder preview, css 'card'), folderCaption
+       └─ _buildControlsPane(settings, window, setPage) → {widget: stack, cleanupFns[]}
+            └─ stack (Gtk.Stack, SLIDE_LEFT_RIGHT) — root page + four subpages
+                 ├─ root      — Layout group: "App grid", "Folder dialog" nav rows
+                 │                Options group: app-name SwitchRow,
+                 │                "Layout snapshots", "Advanced" nav rows
+                 │                (subtitles summarize grid, folder and snapshot state)
+                 ├─ grid      — back header + "Grid size" group: preset switch, ComboRow
+                 │                and info, or custom icon/rows/columns SpinRows,
+                 │                Spacing ExpanderRow and info
+                 ├─ folder    — back header + "Folder grid" group: Rows, Columns,
+                 │                Title size, Spacing ExpanderRow and info
+                 ├─ snapshots — back header + "Saved layouts": name entry, save row,
+                 │                saved-layout ComboRow, restore/delete buttons, status
+                 └─ advanced  — back header + "Page consolidation" SwitchRow
 ```
+
+`showPage(name, back)` switches the left stack and calls the preview pane's `setPage()`
+callback, so the right preview follows the active category.
+
+Each subpage is a `Gtk.Box` holding a back header (`go-previous-symbolic` flat button and a
+`title-4` label) plus a `Gtk.ScrolledWindow` wrapping its content box.
+`addNavRow()` adds an `Adw.ActionRow` with a `go-next-symbolic` suffix and switches pages on
+`activated`; `showPage(name, back)` picks the slide direction. `updateRootRows()` refreshes
+the root subtitles from the preset/custom, folder and snapshot settings.
 
 `fillPreferencesWindow` collects cleanup functions from both panes and invokes them once
 from the window's `close-request` signal. Every signal is disconnected from its owner.
@@ -415,15 +465,23 @@ from the window's `close-request` signal. Every signal is disconnected from its 
 
 | Function | Purpose |
 |---|---|
-| `createSpinRow(settings, key, title, {lower, upper, step, page})` | Creates an `Adw.SpinRow` with `Gtk.Adjustment`, binds to GSettings key |
-| `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, showNames}` |
-| `drawFolderPreviewSection(...)` | Draws the full configured rows/columns (empty cells dimmed) with gaps, icon size, 24 px page padding and optional labels |
+| `createSpinRow(settings, key, title, {lower, upper, step, page, subtitle})` | Creates an `Adw.SpinRow` with `Gtk.Adjustment`, binds to GSettings key |
+| `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, folderTitleSize, showNames}` |
+| `drawFolderPreviewSection(...)` | Draws the full configured rows/columns (empty cells dimmed) with gaps, icon size, title-bar height, 24 px page padding, optional labels and a square panel for square grids |
 | `captureSnapshot` / `restoreSnapshot` | Stores/restores GVariant settings, app-picker layout and folder definitions |
 | `refreshSnapshotRows` | Rebuilds the saved-layout ComboRow from `parseSnapshots()` |
 
 ### Grid preview (DrawingArea)
 
-The right pane draws a scaled preview of the overview using Cairo (`set_draw_func`).
+The right pane draws a scaled preview with Cairo (`set_draw_func`). It has two pages:
+`overviewPage` renders the Shell overview, and `folderPage` renders the configured
+folder-dialog panel. The Folder dialog settings page selects `folderPage`; every other page
+keeps `overviewPage`. The folder page uses the same card and aspect frame as the overview,
+draws `drawFolderPreviewSection()` over the dimmed wallpaper, and updates its label/caption
+(rows × columns, capacity, gap, icon size, title size, label visibility) whenever an extension
+setting changes.
+
+The overview page draws the overview using the following calculations.
 
 **Icon area estimation** uses `estimateGridArea(monitorW, monitorH)`, which applies the
 GNOME Shell layout formula using the `SHELL_*` constants:
@@ -499,7 +557,7 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 
 ## GSettings Schema
 
-15 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+16 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
@@ -515,6 +573,7 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 | `folder-columns` | int | `3` | 2–6 |
 | `folder-row-spacing` | int | `12` | 0–64 |
 | `folder-column-spacing` | int | `12` | 0–64 |
+| `folder-title-size` | int | `20` | 0–48 (0 = system theme) |
 | `show-app-names` | bool | `true` | — |
 | `layout-snapshots` | string | `''` | Internal JSON snapshot store |
 | `runtime-preview-layout` | string | `''` | Internal live Shell layout snapshot for the preview |
@@ -528,6 +587,8 @@ After modifying the schema XML, recompile: `glib-compile-schemas schemas/`
 ```bash
 glib-compile-schemas schemas/
 gnome-extensions pack --force \
+  --podir=po \
+  --gettext-domain=appgrid-size@luyao \
   --extra-source=config.js \
   --extra-source=gridPages.js \
   --extra-source=gridLayout.js \
@@ -583,37 +644,52 @@ restore capacity.
 
 The probe backs up and restores extension settings, `org.gnome.shell app-picker-layout`, and
 (when `TEST_FOLDER=1`) the temporary folder settings used for the 32 px/96 px folder-dialog
-checks, configured rows/columns/gaps, uniform page padding and balanced side margins, dialog
-fit, app-name visibility in the grid and folder, folder paging/reflow, and the
-disable-restoration check. The paging check temporarily
-grows the folder to six apps, shrinks its capacity to 2×2, grows it back and restores the
-original app list. Acceptance is the probe exit status; a failing run copies the guest work
-directory and Shell log into `<cache>/logs/`, and the run overlay is still discarded unless
-`--keep-overlay` is used.
+checks, configured rows/columns/gaps/title size, uniform page padding and symmetric side
+margins, square panels for square grids, dialog fit, edit-button scaling, app-name
+visibility in the grid and folder, folder paging/reflow, and the disable-restoration check.
+The paging check temporarily grows the folder to six apps, shrinks its capacity to 2×2,
+grows it back and restores the original app list. Acceptance is the probe exit status; a
+failing run copies the guest work directory and Shell log into `<cache>/logs/`, and the run
+overlay is still discarded unless `--keep-overlay` is used.
 
-Host requirements: x86_64 Linux, QEMU, OpenSSH client, curl, python3, `timeout`, and one of
+Host requirements: x86_64 Linux, QEMU, OpenSSH client, curl, python3, `gettext`
+(`msgfmt`), `timeout`, and one of
 `cloud-localds`/`genisoimage`/`mkisofs`/`xorriso`. KVM is used when usable, TCG otherwise.
 The virtual monitor defaults to 1920×1080 for every case; `MONITOR=WxH` overrides it.
 
-### Legacy live-session harnesses
+### QEMU-only acceptance
 
-These are for manual debugging on a disposable VM or host and are not part of the default
-acceptance path:
-
-```bash
-scripts/verify-ubuntu-vm.sh
-SKIP_RESTART=1 scripts/verify-ubuntu-vm.sh   # already-installed files
-SCREENSHOT_DIR='' scripts/verify-ubuntu-vm.sh # no screenshots
-scripts/verify-fedora-headless.sh
-```
-
-The Ubuntu script builds/installs the package, restarts GDM, enables Looking Glass unsafe
-mode through VirtualBox keyboard automation, runs the probe, and captures diagnostic
-screenshots. The Fedora script runs the probe against the host's isolated headless Shell and
-guards live `enabled-extensions` and `app-picker-layout` settings against leakage.
+All automated runtime verification goes through `scripts/verify-qemu.sh`; there is no live
+desktop or separate VM harness. The host builder compiles `po/*.po` with `msgfmt` and adds
+`locale/<lang>/LC_MESSAGES/<domain>.mo` to the disposable extension package, so the guest
+probe also checks that the Chinese catalog loads.
 
 GNOME Shell caches extension ESM modules: disabling/enabling does not load changed files.
 Restart the graphical session after installing a new build.
+
+---
+
+## Localization
+
+The UI uses gettext. `metadata.json` declares `"gettext-domain": "appgrid-size@luyao"`;
+`prefs.js` imports `gettext as _` from the Shell prefs module. `po/zh_CN.po` holds the
+Simplified Chinese catalog, `po/LINGUAS` lists the packaged languages, and
+`po/POTFILES.in` names the translatable sources.
+
+- Wrap every user-facing string in `_()`; keep msgids as single-line literals so the
+  coverage test can find them.
+- Use `{name}` placeholders and `formatMessage()` for dynamic values instead of building
+  sentences by concatenation, so translations can reorder them.
+- Pass `_` into `snapshotLabel(snapshot, _)`; its vocabulary msgids (`folder`, `names`,
+  `no names`) live in `snapshots.js`.
+- Package with `--podir=po --gettext-domain=appgrid-size@luyao`; the ZIP then contains
+  `locale/zh_CN/LC_MESSAGES/appgrid-size@luyao.mo`.
+- `tests/i18n.test.js` requires every extracted msgid to have a non-empty Chinese
+  translation with matching placeholders and rejects stale entries. The QEMU probe also
+  loads the packaged catalog and checks a Chinese string and placeholder.
+
+To add a language, create `po/<lang>.po`, add the code to `po/LINGUAS`, run
+`msgfmt --check po/<lang>.po`, and extend the i18n test.
 
 ---
 
@@ -644,16 +720,17 @@ Restart the graphical session after installing a new build.
 | `snapshots.js` | Validation, ordering, cap and display labels for saved layout snapshots |
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, folder layout, names, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
-| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/dialog sizing/names/paging and snapshots |
+| `po/zh_CN.po` | Simplified Chinese gettext catalog for the UI and metadata |
+| `po/LINGUAS` | Languages compiled into `locale/` during packaging |
+| `po/POTFILES.in` | Sources scanned for translatable strings |
+| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/dialog sizing/names/paging, snapshots and i18n coverage |
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
-| `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
-| `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation assertions for both layouts |
+| `scripts/validate-extension.mjs` | Local metadata, runtime API, import, gettext and ZIP review checks used by CI |
+| `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation/localization assertions for both layouts |
 | `scripts/verify-qemu.sh` | Host orchestrator: cached cloud images, golden provisioning, disposable per-run overlays |
 | `scripts/qemu-guest-probe.sh` | In-guest isolated headless-Shell runner used by `verify-qemu.sh` |
-| `scripts/verify-ubuntu-vm.sh` | Legacy VirtualBox/GDM live-session harness |
-| `scripts/verify-fedora-headless.sh` | Legacy isolated headless upstream probe on the live host |
 | `LICENSE` | MIT license text |
-| `metadata.json` | UUID, name, description, shell-version, settings-schema |
+| `metadata.json` | UUID, name, description, gettext-domain, shell-version, settings-schema |
 | `schemas/…gschema.xml` | GSettings key definitions |
 | `schemas/gschemas.compiled` | Compiled schema (generated, do not edit) |
 | `docs/grid-allocation.md` | GNOME Shell 50 app grid layout allocation analysis (source code reference) |

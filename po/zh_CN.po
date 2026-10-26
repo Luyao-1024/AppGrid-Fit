@@ -1,0 +1,281 @@
+# Simplified Chinese translation for AppGrid Fit.
+msgid ""
+msgstr ""
+"Project-Id-Version: AppGrid Fit 1.3.4\n"
+"Report-Msgid-Bugs-To: https://github.com/Luyao-1024/AppGrid-Fit/issues\n"
+"POT-Creation-Date: 2026-10-26 19:00+0800\n"
+"PO-Revision-Date: 2026-10-26 19:00+0800\n"
+"Last-Translator: AppGrid Fit contributors\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "App Grid"
+msgstr "应用网格"
+
+msgid "Back"
+msgstr "返回"
+
+msgid "Grid size"
+msgstr "网格尺寸"
+
+msgid "Preset sizes or a custom icon size, capacity and spacing"
+msgstr "使用预设尺寸，或自定义图标大小、容量和间距"
+
+msgid "Use preset sizes"
+msgstr "使用预设尺寸"
+
+msgid "Off to customize icon size and grid manually"
+msgstr "关闭后可手动设置图标大小和网格"
+
+msgid "{size} — {icon} px"
+msgstr "{size} — {icon} 像素"
+
+msgid "Size"
+msgstr "尺寸"
+
+msgid "{icon} px icons · {gap} px gap · adaptive balanced grid"
+msgstr "{icon} 像素图标 · {gap} 像素间距 · 自适应均衡网格"
+
+msgid "Icon pixel size"
+msgstr "图标像素大小"
+
+msgid "Rows per page"
+msgstr "每页行数"
+
+msgid "Columns per page"
+msgstr "每页列数"
+
+msgid "Spacing"
+msgstr "间距"
+
+msgid "Row and column gaps in pixels"
+msgstr "行间距和列间距（像素）"
+
+msgid "Row gap (px)"
+msgstr "行间距（像素）"
+
+msgid "Column gap (px)"
+msgstr "列间距（像素）"
+
+msgid "Folder grid"
+msgstr "文件夹网格"
+
+msgid "Opened folder layout and title"
+msgstr "文件夹弹窗布局与标题"
+
+msgid "Rows"
+msgstr "行数"
+
+msgid "Columns"
+msgstr "列数"
+
+msgid "Title size (px)"
+msgstr "标题大小（像素）"
+
+msgid "0 follows the system theme; the edit button scales with the title"
+msgstr "0 表示跟随系统主题；编辑按钮会随标题缩放"
+
+msgid "{size} px"
+msgstr "{size} 像素"
+
+msgid "system"
+msgstr "系统"
+
+msgid "{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · title {title} · {labels} · dialog fits the configured grid"
+msgstr "{rows} × {columns} = {capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · 标题 {title} · {labels} · 弹窗适配所配置的网格"
+
+msgid "labels shown"
+msgstr "显示名称"
+
+msgid "labels hidden"
+msgstr "隐藏名称"
+
+msgid "Saved layouts"
+msgstr "已保存布局"
+
+msgid "Save layout settings, app order and folder contents"
+msgstr "保存布局设置、应用顺序和文件夹内容"
+
+msgid "Snapshot name"
+msgstr "快照名称"
+
+msgid "Save current layout"
+msgstr "保存当前布局"
+
+msgid "Captures the current grid, labels and app arrangement"
+msgstr "记录当前网格、名称显示和应用排列"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Selected layout"
+msgstr "所选布局"
+
+msgid "Restoring replaces the grid, app order and folders"
+msgstr "恢复后将替换网格、应用顺序和文件夹"
+
+msgid "Restore"
+msgstr "恢复"
+
+msgid "Delete"
+msgstr "删除"
+
+msgid "Page consolidation"
+msgstr "页面合并"
+
+msgid "Permanently rewrites the saved app order"
+msgstr "永久改写已保存的应用顺序"
+
+msgid "Consolidate app pages"
+msgstr "合并应用页面"
+
+msgid "Fill earlier pages and permanently save the new app order"
+msgstr "填充前面的页面并永久保存新的应用顺序"
+
+msgid "{name} — {summary}"
+msgstr "{name} — {summary}"
+
+msgid "Saved layouts: {count}"
+msgstr "已保存布局：{count}"
+
+msgid "No saved layouts yet"
+msgstr "还没有保存的布局"
+
+msgid "Layout {number}"
+msgstr "布局 {number}"
+
+msgid "Limit reached ({max}); delete a snapshot first"
+msgstr "已达上限（{max}）；请先删除一个快照"
+
+msgid "Saved “{name}”"
+msgstr "已保存“{name}”"
+
+msgid "Could not save: {error}"
+msgstr "保存失败：{error}"
+
+msgid "Deleted “{name}”"
+msgstr "已删除“{name}”"
+
+msgid "Restore “{name}”?"
+msgstr "恢复“{name}”？"
+
+msgid "This replaces the current layout settings, app order and folder contents."
+msgstr "这将替换当前的布局设置、应用顺序和文件夹内容。"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Restored “{name}”"
+msgstr "已恢复“{name}”"
+
+msgid "Could not restore: {error}"
+msgstr "恢复失败：{error}"
+
+msgid "{rows} × {columns} = {capacity} apps per page, gap {rowGap}×{colGap} px"
+msgstr "{rows} × {columns} = {capacity} 个应用/页，间距 {rowGap}×{colGap} 像素"
+
+msgid "Layout"
+msgstr "布局"
+
+msgid "App grid"
+msgstr "应用网格"
+
+msgid "Folder dialog"
+msgstr "文件夹弹窗"
+
+msgid "Options"
+msgstr "选项"
+
+msgid "Show application names"
+msgstr "显示应用名称"
+
+msgid "Show labels under app and folder icons"
+msgstr "在应用和文件夹图标下显示名称"
+
+msgid "Layout snapshots"
+msgstr "布局快照"
+
+msgid "Advanced"
+msgstr "高级"
+
+msgid "{preset} · {icon} px"
+msgstr "{preset} · {icon} 像素"
+
+msgid "Custom · {icon} px · {rows}×{columns}"
+msgstr "自定义 · {icon} 像素 · {rows}×{columns}"
+
+msgid "{rows}×{columns} · title {title}"
+msgstr "{rows}×{columns} · 标题 {title}"
+
+msgid "{count} saved"
+msgstr "已保存 {count} 个"
+
+msgid "No saved layouts"
+msgstr "无已保存布局"
+
+msgid "Page consolidation rewrites the app order"
+msgstr "页面合并会改写应用顺序"
+
+msgid "Folder dialog preview · {rows} × {columns}"
+msgstr "文件夹弹窗预览 · {rows} × {columns}"
+
+msgid "{capacity} apps per page · gap {rowGap}×{colGap} px · {icon} px icons · title {title} · {labels}"
+msgstr "{capacity} 个应用/页 · 间距 {rowGap}×{colGap} 像素 · {icon} 像素图标 · 标题 {title} · {labels}"
+
+msgid "Live Shell geometry"
+msgstr "Shell 实时几何"
+
+msgid "Live icon area · open Overview for exact placement"
+msgstr "实时图标区域 · 打开概览以获取精确位置"
+
+msgid "Estimated icon area · open Overview for exact placement"
+msgstr "估算图标区域 · 打开概览以获取精确位置"
+
+msgid "Monitor: {width} × {height}  ·  {area}: {iconWidth} × {iconHeight}"
+msgstr "显示器：{width} × {height}  ·  {area}：{iconWidth} × {iconHeight}"
+
+msgid "Balanced fit: {rows}×{columns} = {capacity} capacity  ·  {count} apps on current page"
+msgstr "均衡适配：{rows}×{columns} = {capacity} 个容量  ·  当前页 {count} 个应用"
+
+msgid "Grid: {rows}×{columns} = {apps} apps  ·  {width}×{height}px  ·  {percentW}%×{percentH}% of icon area"
+msgstr "网格：{rows}×{columns} = {apps} 个应用  ·  {width}×{height} 像素  ·  占图标区域 {percentW}%×{percentH}%"
+
+msgid "Capacity estimate: {rows}×{columns} = {apps} apps  ·  {width}×{height}px"
+msgstr "容量估算：{rows}×{columns} = {apps} 个应用  ·  {width}×{height} 像素"
+
+msgid "Configured grid differs from the capacity estimate"
+msgstr "配置的网格与容量估算不一致"
+
+msgid "Fit {rows}×{columns}"
+msgstr "适配 {rows}×{columns}"
+
+msgid "Large"
+msgstr "大"
+
+msgid "Medium"
+msgstr "中"
+
+msgid "Small"
+msgstr "小"
+
+msgid "Tiny"
+msgstr "极小"
+
+msgid "folder"
+msgstr "文件夹"
+
+msgid "names"
+msgstr "名称"
+
+msgid "no names"
+msgstr "无名称"
+
+msgid "AppGrid Fit"
+msgstr "AppGrid Fit"
+
+msgid "Customize App Grid and folder dialog layout, hide app names, and save restorable layout snapshots"
+msgstr "自定义应用网格与文件夹弹窗布局，隐藏应用名称，并保存可恢复的布局快照"

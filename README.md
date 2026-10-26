@@ -9,7 +9,7 @@ Current version: **1.3.4**
 - **4 preset levels**: Large (96px), Medium (64px), Small (48px), Tiny (32px)
 - **Balanced fit**: Presets calculate rows/columns from your screen and Shell's full app-tile size while using 80% of the available width for a centered layout
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
-- **Configurable folder dialogs**: Choose the folder dialog's icon size, rows, columns and gaps, with a dedicated preview in the preferences window; child icons, labels and spacing follow the same settings, the dialog always keeps the configured grid area (a 3×3 folder shows 3×3 even with fewer apps), and the panel fits that grid with balanced 24 px side margins instead of leaving a wide empty border
+- **Configurable folder dialogs**: Choose the folder dialog's icon size, rows, columns, gaps and title size, with a dedicated preview in the preferences window; child icons, labels and spacing follow the same settings, the dialog always keeps the configured grid area (a 3×3 folder shows 3×3 even with fewer apps), and the panel fits that grid with balanced 24 px side margins while keeping the folder name and edit button inside and centered. The edit button scales with the title, a title size of 0 follows the system theme, and square grids (3×3, 4×4 and similar) keep a square panel background
 - **Show or hide application names**: Toggles labels under apps and folders in both the App Grid and folder dialogs, and the preview reflects the choice
 - **Layout snapshots**: Save the current grid, app order, folder contents and visibility settings as a named snapshot, keep up to 20, and restore any of them after confirming the replacement
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
@@ -58,6 +58,8 @@ glib-compile-schemas schemas/
 
 # Package
 gnome-extensions pack --force \
+  --podir=po \
+  --gettext-domain=appgrid-size@luyao \
   --extra-source=config.js \
   --extra-source=gridPages.js \
   --extra-source=gridLayout.js \
@@ -83,15 +85,17 @@ Open the extension preferences via:
 - **Extensions** app → AppGrid Fit → Settings
 - Or run: `gnome-extensions prefs appgrid-size@luyao`
 
-Switch between presets or disable **Use preset sizes** for granular control. Custom values are independent: changing the icon size does not overwrite the configured rows, columns, or spacing. Folder dialogs have their own rows, columns and gap controls, and **Layout snapshots** stores the whole arrangement — including `app-picker-layout` and folder membership — for later restoration.
+Switch between presets or disable **Use preset sizes** for granular control. Custom values are independent: changing the icon size does not overwrite the configured rows, columns, or spacing. Folder dialogs have their own rows, columns, gap and title-size controls, and **Layout snapshots** stores the whole arrangement — including `app-picker-layout` and folder membership — for later restoration. The settings window opens on a short root menu: **App grid**, **Folder dialog**, **Layout snapshots** and **Advanced** open as subpages with a back button, while **Show application names** stays on the root. Each root row summarizes its current configuration, and row/column spacing sits in a collapsible expander. The right preview follows the active page: **App grid** shows the live overview preview, **Folder dialog** shows the configured folder-dialog preview, and the other pages keep the overview preview. Most pages fit without scrolling.
 
 **Consolidate app pages** is disabled by default. Enabling it fills earlier pages and permanently saves the resulting application order.
 
-The preferences window uses a horizontal layout with scrollable controls on the left and a large monitor preview on the right. While the extension is active, the preview uses measured App Grid tiles, icons, per-page item counts, page indicators, dock visibility and position, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Preview colors are varied deterministically from each application or folder ID, avoiding row or column color bands without flickering between redraws. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. The window defaults to a monitor-aware size within 760–1200 × 420–560, and the controls pane scrolls on smaller displays. When a custom grid exceeds the estimated screen capacity, the preview reports the mismatch and offers a Fit button that applies the suggested rows and columns.
+**Language**: the preferences UI follows the system locale. English is the source language, and a Simplified Chinese translation is included; the extension metadata description and settings pages switch automatically on Chinese systems.
+
+The preferences window uses a horizontal layout with a navigable controls pane on the left and a large live preview on the right. The preview switches with the selected page and stays visible while you adjust values, so changes can be compared immediately: **App grid** shows the measured overview, **Folder dialog** shows the configured folder panel with its title bar, grid and gaps, and the remaining pages keep the overview. While the extension is active, the overview preview uses measured App Grid tiles, icons, per-page item counts, page indicators, dock visibility and position, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Preview colors are varied deterministically from each application or folder ID, avoiding row or column color bands without flickering between redraws. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. The window defaults to a monitor-aware size within 760–1200 × 420–560, and the controls subpages scroll on smaller displays. When a custom grid exceeds the estimated screen capacity, the preview reports the mismatch and offers a Fit button that applies the suggested rows and columns.
 
 ## Requirements
 
-- GNOME Shell 46, 47, 48, 49, or 50
+- GNOME Shell 46, 47, 48, 49, 50, or 51
 - Supports both upstream grid modes and Ubuntu 26.04's adaptive App Grid layout.
 
 ## License
@@ -106,12 +110,15 @@ See [CHANGELOG.md](CHANGELOG.md) for release details.
 
 ```bash
 npm run check
+msgfmt --check po/zh_CN.po
 glib-compile-schemas --strict --dry-run schemas/
 ```
 
-CI additionally builds the final ZIP, verifies its GNOME metadata, schema declaration,
-local imports, review-sensitive APIs, archive paths and contents, runs Shexli, and uploads
-the validated package as a workflow artifact.
+`npm run check` runs 56 unit tests, including full Chinese catalog coverage and placeholder
+integrity. CI builds the final ZIP with `--podir=po --gettext-domain=appgrid-size@luyao`,
+verifies its GNOME metadata, schema declaration, local imports, review-sensitive APIs,
+archive paths and contents, requires `locale/zh_CN/LC_MESSAGES/appgrid-size@luyao.mo`, runs
+Shexli, and uploads the validated package as a workflow artifact.
 
 ## Automated compatibility verification
 
@@ -146,10 +153,10 @@ drop their metalinks for Tsinghua base URLs, and provisioning fails if any activ
 still points elsewhere. `fedora-51` pins rawhide repositories to the NJU mirror instead.
 
 Host requirements: x86_64 Linux, `qemu-system-x86_64`, `qemu-img`, `ssh`, `scp`,
-`ssh-keygen`, `curl`, `python3`, `timeout`, and one of `cloud-localds`, `genisoimage`,
-`mkisofs` or `xorriso`. KVM is used when available; otherwise QEMU falls back to TCG, which
-is much slower. The guest uses a 1920×1080 virtual monitor by default; set `MONITOR=WxH` to
-override it. Each run writes its serial log and probe output to
+`ssh-keygen`, `curl`, `python3`, `gettext` (`msgfmt`), `timeout`, and one of `cloud-localds`,
+`genisoimage`, `mkisofs` or `xorriso`. KVM is used when available; otherwise QEMU falls back
+to TCG, which is much slower. The guest uses a 1920×1080 virtual monitor by default; set
+`MONITOR=WxH` to override it. Each run writes its serial log and probe output to
 `<cache>/logs/<timestamp>-<case>/`. Acceptance is the probe exit status. Use
 `--keep-overlay` to keep the throwaway disk for debugging.
 
@@ -158,13 +165,8 @@ and XDG session. `--no-x11` avoids a GVC/Xwayland startup deadlock when no displ
 available, and the isolated session keeps dconf, extension settings and app order out of the
 live desktop.
 
-The older live-session harnesses remain available for manual debugging but are not part of
-the default acceptance path:
-
-```bash
-scripts/verify-ubuntu-vm.sh      # VirtualBox/GDM VM
-scripts/verify-fedora-headless.sh
-```
+QEMU is the only automated test harness; there is no separate VirtualBox or live-desktop
+runner.
 
 See [docs/ubuntu-26.04-verification.md](docs/ubuntu-26.04-verification.md) for the covered
 checks and environment details.

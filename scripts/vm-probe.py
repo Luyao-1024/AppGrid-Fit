@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ast
+import gettext
 import json
 import os
 import re
@@ -30,6 +31,8 @@ FOLDER_COLUMNS = 4
 FOLDER_ROW_SPACING = 8
 FOLDER_COLUMN_SPACING = 14
 FOLDER_PAGE_PADDING = 24
+FOLDER_TITLE_SIZE = 14
+FOLDER_TITLE_BUTTON_FALLBACK = 40
 HOME = Path.home()
 DATA_HOME = Path(os.environ.get('XDG_DATA_HOME', HOME / '.local/share'))
 EXTENSION_DIR = DATA_HOME / 'gnome-shell/extensions' / UUID
@@ -330,10 +333,10 @@ for (const item of items) {{
         cellSize = Math.max(cellSize, width, height);
     }} catch (error) {{}}
 }}
-const itemRects = items.map(item => {{
+const actorRect = actor => {{
     try {{
-        const [x, y] = item.get_transformed_position();
-        const [width, height] = item.get_transformed_size();
+        const [x, y] = actor.get_transformed_position();
+        const [width, height] = actor.get_transformed_size();
         return {{
             x: Math.round(x),
             y: Math.round(y),
@@ -343,7 +346,17 @@ const itemRects = items.map(item => {{
     }} catch (error) {{
         return null;
     }}
-}});
+}};
+const itemRects = items.map(actorRect);
+const fontPx = actor => {{
+    try {{
+        actor.ensure_style();
+        const units = actor.get_theme_node().get_font().get_size();
+        return units > 0 ? units / 1024 : null;
+    }} catch (error) {{
+        return null;
+    }}
+}};
 let boxPosition = [0, 0];
 try {{
     if (box)
@@ -377,6 +390,16 @@ JSON.stringify({{
         height: Math.round(box.height),
         style: box.get_style(),
         titleHeight: Math.round(dialog._entryBox?.height ?? 0),
+    }} : null,
+    title: dialog ? {{
+        label: actorRect(dialog._folderNameLabel),
+        edit: actorRect(dialog._editButton),
+        labelFont: fontPx(dialog._folderNameLabel),
+        entryFont: fontPx(dialog._entry),
+        editFont: fontPx(dialog._editButton),
+        labelStyle: dialog._folderNameLabel.get_style(),
+        entryStyle: dialog._entry.get_style(),
+        editStyle: dialog._editButton.get_style(),
     }} : null,
     itemRects,
     folderTileLabel: folder?.icon?.label?.visible ?? null,
@@ -471,12 +494,15 @@ def dialog_fit_metrics(state):
     content_height = (state['rows'] * state['cellSize'] +
         max(0, state['rows'] - 1) * FOLDER_ROW_SPACING +
         padding['top'] + padding['bottom'])
+    natural_width = content_width + 2
+    natural_height = dialog['titleHeight'] + content_height
+    expected_width = (max(natural_width, natural_height)
+        if state['rows'] == state['columns'] else natural_width)
     return {
-        'expectedWidth': round(content_width + 2),
-        'expectedHeight': round(dialog['titleHeight'] + content_height),
-        'widthDelta': round(dialog['width'] - (content_width + 2)),
-        'heightDelta': round(
-            dialog['height'] - (dialog['titleHeight'] + content_height)),
+        'expectedWidth': round(expected_width),
+        'expectedHeight': round(natural_height),
+        'widthDelta': round(dialog['width'] - expected_width),
+        'heightDelta': round(dialog['height'] - natural_height),
         'pageHeightDelta': round(state['pageHeight'] - content_height),
         'style': dialog.get('style'),
     }
@@ -521,9 +547,64 @@ def folder_horizontal_margins(state):
 def folder_margins_balanced(state):
     margins = folder_horizontal_margins(state)
     return bool(margins and
-        20 <= margins['left'] <= 34 and
-        20 <= margins['right'] <= 34 and
+        margins['left'] >= 20 and
+        margins['right'] >= 20 and
         abs(margins['left'] - margins['right']) <= 4)
+
+
+def folder_title_inside(state):
+    dialog = state.get('dialog') or {}
+    title = state.get('title') or {}
+    label = title.get('label') or {}
+    edit = title.get('edit') or {}
+    values = [
+        dialog.get('x'), dialog.get('width'),
+        label.get('x'), label.get('width'),
+        edit.get('x'), edit.get('width'),
+    ]
+    if any(not isinstance(value, (int, float)) for value in values):
+        return False
+    left = dialog['x']
+    right = dialog['x'] + dialog['width']
+    center = dialog['x'] + dialog['width'] / 2
+    label_center = label['x'] + label['width'] / 2
+    return (label['x'] >= left and
+        label['x'] + label['width'] <= right and
+        edit['x'] >= left and
+        edit['x'] + edit['width'] <= right and
+        abs(label_center - center) <= 4)
+
+
+def folder_title_size_matches(state, size):
+    title = state.get('title') or {}
+    label = title.get('labelFont')
+    entry = title.get('entryFont')
+    return (isinstance(label, (int, float)) and
+        isinstance(entry, (int, float)) and
+        abs(label - size) <= 1 and abs(entry - size) <= 1)
+
+
+def folder_edit_scales_with_title(state):
+    title = state.get('title') or {}
+    edit = title.get('edit') or {}
+    label_font = title.get('labelFont')
+    edit_font = title.get('editFont')
+    width = edit.get('width')
+    return (isinstance(label_font, (int, float)) and
+        isinstance(edit_font, (int, float)) and
+        edit_font < label_font and
+        isinstance(width, (int, float)) and
+        width < FOLDER_TITLE_BUTTON_FALLBACK)
+
+
+def folder_title_follows_theme(state, custom_size):
+    title = state.get('title') or {}
+    label_font = title.get('labelFont')
+    return (isinstance(label_font, (int, float)) and
+        label_font > custom_size + 2 and
+        not (title.get('labelStyle') or '').strip() and
+        not (title.get('entryStyle') or '').strip() and
+        not (title.get('editStyle') or '').strip())
 
 
 def check_folder_icon_sizes():
@@ -531,6 +612,7 @@ def check_folder_icon_sizes():
     gs_set('folder-columns', FOLDER_COLUMNS)
     gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
     gs_set('folder-column-spacing', FOLDER_COLUMN_SPACING)
+    gs_set('folder-title-size', FOLDER_TITLE_SIZE)
     dialog_heights = {}
     for size in (32, 96):
         gs_set('custom-icon-size', size)
@@ -545,6 +627,7 @@ def check_folder_icon_sizes():
                     state.get('columns') == FOLDER_COLUMNS and
                     state.get('rowSpacing') == FOLDER_ROW_SPACING and
                     state.get('columnSpacing') == FOLDER_COLUMN_SPACING and
+                    folder_title_size_matches(state, FOLDER_TITLE_SIZE) and
                     folder_page_padding_matches(state) and
                     len(state.get('childIcons') or []) == len(FOLDER_APPS) and
                     all(icon == size for icon in state['childIcons']) and
@@ -553,6 +636,7 @@ def check_folder_icon_sizes():
                     state['dialog']['height'] > 0 and
                     folder_dialog_fits(state) and
                     folder_margins_balanced(state) and
+                    folder_title_inside(state) and
                     state,
                 f'folder grid at {size}px')
         except RuntimeError as error:
@@ -578,8 +662,16 @@ def check_folder_icon_sizes():
     margins = folder_horizontal_margins(state)
     check('folder dialog side margins are balanced',
         folder_margins_balanced(state), margins)
+    check('folder title and edit button stay inside and centered',
+        folder_title_inside(state),
+        {'title': state.get('title'), 'dialog': state.get('dialog')})
     check('folder dialog height follows the icon size',
         dialog_heights[32] < dialog_heights[96], dialog_heights)
+    check('folder title uses the configured size',
+        folder_title_size_matches(state, FOLDER_TITLE_SIZE),
+        state.get('title'))
+    check('folder edit button scales with the title size',
+        folder_edit_scales_with_title(state), state.get('title'))
 
     named_height = state['dialog']['height']
     gs_set('show-app-names', False)
@@ -621,6 +713,35 @@ def check_folder_icon_sizes():
         all(value is True for value in shown['mainLabels']
             if value is not None), shown)
     check_folder_dialog_fit(shown, 'labels shown')
+
+    gs_set('folder-columns', 3)
+    square = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == FOLDER_ROWS and
+            state.get('columns') == 3 and
+            state.get('itemCount') == len(FOLDER_APPS) and
+            state.get('pageCount') == 1 and
+            folder_page_padding_matches(state) and
+            state.get('dialog') and
+            abs(state['dialog']['width'] - state['dialog']['height']) <= 2 and
+            folder_dialog_fits(state) and
+            folder_title_inside(state) and
+            state,
+        'square folder panel')
+    check('square folder grids use a square panel',
+        abs(square['dialog']['width'] - square['dialog']['height']) <= 2,
+        square['dialog'])
+    gs_set('folder-columns', FOLDER_COLUMNS)
+    wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == FOLDER_ROWS and
+            state.get('columns') == FOLDER_COLUMNS and
+            state.get('itemCount') == len(FOLDER_APPS) and
+            folder_dialog_fits(state) and
+            state,
+        'restored rectangular folder panel')
 
     expanded_apps = FOLDER_APPS + [
         'appgrid-test-14.desktop',
@@ -731,6 +852,9 @@ def check_folder_icon_sizes():
     check('folder dialog restores the default size on disable',
         not (restored['dialog'].get('style') or '').strip() and
         restored['dialog']['height'] >= 500, restored['dialog'])
+    check('folder title restores the system size on disable',
+        folder_title_follows_theme(restored, FOLDER_TITLE_SIZE),
+        restored.get('title'))
     set_extension_enabled(True)
     wait_for_config(96, 2, 3)
     reenabled = wait_for(
@@ -744,6 +868,24 @@ def check_folder_icon_sizes():
             state,
         'folder dialog content fit after re-enable')
     check_folder_dialog_fit(reenabled, 're-enabled')
+    custom_edit_width = (reenabled.get('title') or {}).get('edit', {}).get(
+        'width') or 0
+    gs_set('folder-title-size', 0)
+    auto_title = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            folder_title_follows_theme(state, FOLDER_TITLE_SIZE) and
+            folder_dialog_fits(state) and
+            state.get('title') and
+            state['title']['edit']['width'] > custom_edit_width + 2 and
+            state,
+        'system folder title')
+    check('folder title follows the system size at 0',
+        folder_title_follows_theme(auto_title, FOLDER_TITLE_SIZE),
+        auto_title.get('title'))
+    check('folder edit button grows with the system title',
+        auto_title['title']['edit']['width'] > custom_edit_width + 2,
+        {'custom': custom_edit_width, 'title': auto_title.get('title')})
     close_test_folder()
 
 
@@ -829,6 +971,33 @@ def check_overview_geometry(layout):
             ordered_axis(dash_items, 'x'), dash_items)
 
 
+def check_localization():
+    metadata = json.loads((EXTENSION_DIR / 'metadata.json').read_text())
+    domain = metadata.get('gettext-domain')
+    check('gettext domain declared', domain == UUID,
+        {'expected': UUID, 'actual': domain})
+    if not domain:
+        return
+    localedir = EXTENSION_DIR / 'locale'
+    catalog = localedir / 'zh_CN/LC_MESSAGES' / f'{domain}.mo'
+    check('Chinese catalog packaged', catalog.is_file(), str(catalog))
+    if not catalog.is_file():
+        return
+    try:
+        translation = gettext.translation(
+            domain, localedir=str(localedir), languages=['zh_CN'])
+    except Exception as error:
+        check('Chinese catalog loads', False, str(error))
+        return
+    check('Chinese UI translation',
+        translation.gettext('Folder dialog') == '文件夹弹窗',
+        translation.gettext('Folder dialog'))
+    check('Chinese placeholders preserved',
+        translation.gettext('Fit {rows}×{columns}') ==
+        '适配 {rows}×{columns}',
+        translation.gettext('Fit {rows}×{columns}'))
+
+
 def main():
     EVAL_SCRIPT.write_text(
         '#!/bin/bash\n'
@@ -862,6 +1031,7 @@ def main():
     try:
         check('Shell Eval', eval_js('1 + 1') == 2)
         check('extension active', extension_active(), extension_info())
+        check_localization()
 
         open_apps()
         eval_js('Main.overview._overview._controls.appDisplay._savePages()')

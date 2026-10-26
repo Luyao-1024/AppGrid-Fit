@@ -3,13 +3,14 @@ import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
-import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
     DEFAULT_PAGE_CAPACITY,
     FOLDER_DIALOG_PAGE_PADDING,
     FOLDER_MAX_DIMENSION,
     FOLDER_MAX_SPACING,
+    FOLDER_MAX_TITLE_SIZE,
     FOLDER_MIN_DIMENSION,
     PRESETS,
     PRESET_WIDTH_RATIO,
@@ -80,6 +81,11 @@ function escapeCssString(value) {
         .replaceAll('\\', '\\\\')
         .replaceAll('"', '\\"')
         .replaceAll('\n', '\\a ');
+}
+
+function formatMessage(template, params) {
+    return template.replace(/\{(\w+)\}/g, (match, key) =>
+        params[key] ?? match)
 }
 
 function estimateGridArea(monitorW, monitorH) {
@@ -345,21 +351,25 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
 function drawFolderPreviewSection(cr, x, y, w, h, config) {
     const {
         iconSize, folderRows, folderColumns,
-        folderRowSpacing, folderColumnSpacing, showNames,
+        folderRowSpacing, folderColumnSpacing, folderTitleSize, showNames,
     } = config;
     const rows = Math.max(1, folderRows);
     const columns = Math.max(1, folderColumns);
     const panelPad = FOLDER_DIALOG_PAGE_PADDING;
-    const titleH = 30;
-    const dotsH = 18;
+    const titleH = folderTitleSize > 0
+        ? Math.round(folderTitleSize * 1.24 + 18)
+        : 51;
     const tile = iconSize + (showNames ? 34 : 12);
     const contentW = columns * tile +
         Math.max(0, columns - 1) * folderColumnSpacing + panelPad * 2;
     const contentH = rows * tile +
         Math.max(0, rows - 1) * folderRowSpacing +
-        panelPad * 2 + titleH + dotsH;
-    const scale = Math.min((w - 12) / contentW, (h - 12) / contentH);
-    const panelW = contentW * scale;
+        panelPad * 2 + titleH;
+    const panelUnitsW = rows === columns
+        ? Math.max(contentW, contentH)
+        : contentW;
+    const scale = Math.min((w - 12) / panelUnitsW, (h - 12) / contentH);
+    const panelW = panelUnitsW * scale;
     const panelH = contentH * scale;
     const px = x + (w - panelW) / 2;
     const py = y + (h - panelH) / 2;
@@ -384,7 +394,7 @@ function drawFolderPreviewSection(cr, x, y, w, h, config) {
         Math.max(1, 4 * scale), 2 * scale);
     cr.fill();
 
-    const gridX = px + panelPad * scale;
+    const gridX = px + (panelPad + (panelUnitsW - contentW) / 2) * scale;
     const gridY = py + (panelPad + titleH) * scale;
     const capacity = rows * columns;
     const sampleCount = Math.min(capacity, 12);
@@ -421,13 +431,6 @@ function drawFolderPreviewSection(cr, x, y, w, h, config) {
         }
     }
 
-    const dotsY = py + panelH - dotsH * scale * 0.55;
-    for (let index = 0; index < 2; index++) {
-        cr.setSourceRGBA(0.9, 0.92, 0.96, index === 0 ? 0.75 : 0.25);
-        cr.arc(px + panelW / 2 + (index - 0.5) * 12 * scale, dotsY,
-            Math.max(1, 2.5 * scale), 0, Math.PI * 2);
-        cr.fill();
-    }
     cr.restore();
 }
 
@@ -496,9 +499,11 @@ function drawDashSection(cr, fx, fy, fW, dY, dH, sc,
     }
 }
 
-function createSpinRow(settings, key, title, {lower, upper, step, page}) {
+function createSpinRow(settings, key, title,
+    {lower, upper, step, page, subtitle = null}) {
     const row = new Adw.SpinRow({
         title,
+        subtitle,
         adjustment: new Gtk.Adjustment({
             lower, upper, step_increment: step, page_increment: page,
         }),
@@ -515,6 +520,7 @@ function readGridConfig(settings) {
         folderColumns: folder.columns,
         folderRowSpacing: folder.rowSpacing,
         folderColumnSpacing: folder.columnSpacing,
+        folderTitleSize: folder.titleSize,
         showNames: folder.showNames,
     };
     if (settings.get_boolean('use-presets')) {
@@ -676,7 +682,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Math.max(420, Math.min(560, monitorHeight - 120)));
 
         const page = new Adw.PreferencesPage({
-            title: 'App Grid',
+            title: _('App Grid'),
             icon_name: 'view-app-grid-symbolic',
         });
         window.add(page);
@@ -693,6 +699,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const rootRow = new Adw.PreferencesRow({
             activatable: false,
             selectable: false,
+            focusable: false,
         });
 
         const paned = new Gtk.Paned({
@@ -704,50 +711,108 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             resize_end_child: true,
         });
 
-        const {widget: controlsBox, cleanupFns: ctrlFns} =
-            this._buildControlsPane(settings, window);
-        cleanupFns.push(...ctrlFns);
-
-        const {widget: rightBox, cleanupFns: prevFns} =
+        const {widget: preview, cleanupFns: prevFns, setPage} =
             this._buildPreviewPane(settings, window);
         cleanupFns.push(...prevFns);
 
+        const {widget: controlsBox, cleanupFns: ctrlFns} =
+            this._buildControlsPane(settings, window, setPage);
+        cleanupFns.push(...ctrlFns);
+
         paned.set_start_child(controlsBox);
-        paned.set_end_child(rightBox);
+        paned.set_end_child(preview);
         rootRow.set_child(paned);
         rootGroup.add(rootRow);
     }
 
-    _buildControlsPane(settings, window) {
+    _buildControlsPane(settings, window, onPageChanged = null) {
         const cleanupFns = [];
 
-        const leftBox = new Gtk.Box({
+        const createContentBox = () => new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
             margin_top: 16, margin_bottom: 16,
             margin_start: 24, margin_end: 24,
         });
+        const rootBox = createContentBox();
+        const gridBox = createContentBox();
+        const folderBox = createContentBox();
+        const snapshotsBox = createContentBox();
+        const advancedBox = createContentBox();
 
-        const modeGroup = new Adw.PreferencesGroup({title: 'Mode'});
+        const stack = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.SLIDE_LEFT_RIGHT,
+            transition_duration: 180,
+            hexpand: true,
+            vexpand: true,
+        });
+        const showPage = (name, back = false) => {
+            stack.transition_type = back
+                ? Gtk.StackTransitionType.SLIDE_RIGHT
+                : Gtk.StackTransitionType.SLIDE_LEFT;
+            stack.set_visible_child_name(name);
+            onPageChanged?.(name);
+        };
+        const addPage = (name, title, content) => {
+            const scroller = new Gtk.ScrolledWindow({
+                hscrollbar_policy: Gtk.PolicyType.NEVER,
+                vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+                hexpand: true,
+                vexpand: true,
+            });
+            scroller.set_child(content);
+            if (!title) {
+                stack.add_named(scroller, name);
+                return;
+            }
+            const page = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
+            const header = new Gtk.Box({
+                orientation: Gtk.Orientation.HORIZONTAL,
+                spacing: 6,
+                margin_top: 10,
+                margin_bottom: 2,
+                margin_start: 10,
+                margin_end: 24,
+            });
+            const backButton = new Gtk.Button({
+                icon_name: 'go-previous-symbolic',
+                tooltip_text: _('Back'),
+                valign: Gtk.Align.CENTER,
+                css_classes: ['flat'],
+            });
+            backButton.connect('clicked', () => showPage('root', true));
+            header.append(backButton);
+            header.append(new Gtk.Label({
+                label: title,
+                xalign: 0,
+                hexpand: true,
+                css_classes: ['title-4'],
+            }));
+            page.append(header);
+            page.append(scroller);
+            stack.add_named(page, name);
+        };
+
+        const gridGroup = new Adw.PreferencesGroup({
+            title: _('Grid size'),
+            description: _('Preset sizes or a custom icon size, capacity and spacing'),
+        });
         const switchRow = new Adw.SwitchRow({
-            title: 'Use preset sizes',
-            subtitle: 'Off to customize icon size and grid manually',
+            title: _('Use preset sizes'),
+            subtitle: _('Off to customize icon size and grid manually'),
         });
         settings.bind('use-presets', switchRow, 'active',
             Gio.SettingsBindFlags.DEFAULT);
-        modeGroup.add(switchRow);
-        leftBox.append(modeGroup);
-
-        const presetsGroup = new Adw.PreferencesGroup({
-            title: 'Presets',
-            description: 'Pick a ready-made combination',
-        });
+        gridGroup.add(switchRow);
 
         const model = new Gtk.StringList();
-        PRESETS.forEach((p, i) =>
-            model.append(`${SIZE_NAMES[i]} — ${p.iconSize}px`));
+        PRESETS.forEach((p, i) => model.append(formatMessage(
+            _('{size} — {icon} px'), {
+                size: _(SIZE_NAMES[i]),
+                icon: p.iconSize,
+            })));
 
-        const comboRow = new Adw.ComboRow({title: 'Size', model});
+        const comboRow = new Adw.ComboRow({title: _('Size'), model});
         comboRow.selected = settings.get_int('preset-level');
 
         const presetInfo = new Gtk.Label({
@@ -766,8 +831,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         const updatePresetInfo = () => {
             const p = PRESETS[comboRow.selected];
-            presetInfo.label =
-                `${p.iconSize}px icons · ${p.gap}px gap · adaptive balanced grid`;
+            presetInfo.label = formatMessage(
+                _('{icon} px icons · {gap} px gap · adaptive balanced grid'), {
+                    icon: p.iconSize,
+                    gap: p.gap,
+                });
         };
         connectSignal(cleanupFns, settings, 'changed::preset-level', () => {
             comboRow.selected = settings.get_int('preset-level');
@@ -778,31 +846,33 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             updatePresetInfo();
         });
         updatePresetInfo();
-        presetsGroup.add(comboRow);
-        presetsGroup.add(presetInfoRow);
-        leftBox.append(presetsGroup);
+        gridGroup.add(comboRow);
+        gridGroup.add(presetInfoRow);
 
-        const customGroup = new Adw.PreferencesGroup({
-            title: 'Custom',
-            description: 'Adjust icon size, capacity and spacing independently',
+        const iconSizeRow = createSpinRow(settings, 'custom-icon-size',
+            _('Icon pixel size'), {lower: 16, upper: 160, step: 8, page: 16});
+        gridGroup.add(iconSizeRow);
+        const rowsRow = createSpinRow(settings, 'custom-rows',
+            _('Rows per page'), {
+                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
+                step: 1, page: 2,
+            });
+        gridGroup.add(rowsRow);
+        const columnsRow = createSpinRow(settings, 'custom-columns',
+            _('Columns per page'), {
+                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
+                step: 1, page: 2,
+            });
+        gridGroup.add(columnsRow);
+        const gridSpacingRow = new Adw.ExpanderRow({
+            title: _('Spacing'),
+            subtitle: _('Row and column gaps in pixels'),
         });
-
-        customGroup.add(createSpinRow(settings, 'custom-icon-size',
-            'Icon pixel size', {lower: 16, upper: 160, step: 8, page: 16}));
-        customGroup.add(createSpinRow(settings, 'custom-rows',
-            'Rows per page', {
-                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
-                step: 1, page: 2,
-            }));
-        customGroup.add(createSpinRow(settings, 'custom-columns',
-            'Columns per page', {
-                lower: CUSTOM_MIN_DIMENSION, upper: CUSTOM_MAX_DIMENSION,
-                step: 1, page: 2,
-            }));
-        customGroup.add(createSpinRow(settings, 'custom-row-spacing',
-            'Row spacing (px)', {lower: 0, upper: 200, step: 2, page: 8}));
-        customGroup.add(createSpinRow(settings, 'custom-column-spacing',
-            'Column spacing (px)', {lower: 0, upper: 200, step: 2, page: 8}));
+        gridSpacingRow.add_row(createSpinRow(settings, 'custom-row-spacing',
+            _('Row gap (px)'), {lower: 0, upper: 200, step: 2, page: 8}));
+        gridSpacingRow.add_row(createSpinRow(settings, 'custom-column-spacing',
+            _('Column gap (px)'), {lower: 0, upper: 200, step: 2, page: 8}));
+        gridGroup.add(gridSpacingRow);
 
         const infoLabel = new Gtk.Label({
             label: '',
@@ -817,31 +887,41 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             selectable: false,
         });
         infoRow.set_child(infoLabel);
-        customGroup.add(infoRow);
-        leftBox.append(customGroup);
+        gridGroup.add(infoRow);
+        gridBox.append(gridGroup);
 
         const folderGroup = new Adw.PreferencesGroup({
-            title: 'Folder dialog',
-            description: 'Layout of an opened folder; child icons follow the app icon size',
+            title: _('Folder grid'),
+            description: _('Opened folder layout and title'),
         });
         folderGroup.add(createSpinRow(settings, 'folder-rows',
-            'Rows', {
+            _('Rows'), {
                 lower: FOLDER_MIN_DIMENSION, upper: FOLDER_MAX_DIMENSION,
                 step: 1, page: 1,
             }));
         folderGroup.add(createSpinRow(settings, 'folder-columns',
-            'Columns', {
+            _('Columns'), {
                 lower: FOLDER_MIN_DIMENSION, upper: FOLDER_MAX_DIMENSION,
                 step: 1, page: 1,
             }));
-        folderGroup.add(createSpinRow(settings, 'folder-row-spacing',
-            'Row spacing (px)', {
+        folderGroup.add(createSpinRow(settings, 'folder-title-size',
+            _('Title size (px)'), {
+                lower: 0, upper: FOLDER_MAX_TITLE_SIZE, step: 1, page: 4,
+                subtitle: _('0 follows the system theme; the edit button scales with the title'),
+            }));
+        const folderSpacingRow = new Adw.ExpanderRow({
+            title: _('Spacing'),
+            subtitle: _('Row and column gaps in pixels'),
+        });
+        folderSpacingRow.add_row(createSpinRow(settings, 'folder-row-spacing',
+            _('Row gap (px)'), {
                 lower: 0, upper: FOLDER_MAX_SPACING, step: 2, page: 8,
             }));
-        folderGroup.add(createSpinRow(settings, 'folder-column-spacing',
-            'Column spacing (px)', {
+        folderSpacingRow.add_row(createSpinRow(settings, 'folder-column-spacing',
+            _('Column gap (px)'), {
                 lower: 0, upper: FOLDER_MAX_SPACING, step: 2, page: 8,
             }));
+        folderGroup.add(folderSpacingRow);
 
         const folderInfo = new Gtk.Label({
             label: '',
@@ -857,62 +937,32 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         });
         folderInfoRow.set_child(folderInfo);
         folderGroup.add(folderInfoRow);
-        leftBox.append(folderGroup);
-
-        const folderPreviewGroup = new Adw.PreferencesGroup({
-            title: 'Folder preview',
-        });
-        const folderDa = new Gtk.DrawingArea({
-            content_width: 360,
-            content_height: 180,
-            hexpand: true,
-        });
-        folderDa.set_draw_func((_area, cr, drawW, drawH) => {
-            const config = readGridConfig(settings);
-            drawFolderPreviewSection(cr, 0, 0, drawW, drawH, {
-                iconSize: config.iconSize,
-                folderRows: config.folderRows,
-                folderColumns: config.folderColumns,
-                folderRowSpacing: config.folderRowSpacing,
-                folderColumnSpacing: config.folderColumnSpacing,
-                showNames: config.showNames,
-            });
-        });
-        const folderPreviewFrame = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            overflow: Gtk.Overflow.HIDDEN,
-        });
-        folderPreviewFrame.add_css_class('card');
-        folderPreviewFrame.append(folderDa);
-        const folderPreviewAspect = new Gtk.AspectFrame({
-            ratio: 2,
-            obey_child: false,
-            hexpand: true,
-        });
-        folderPreviewAspect.set_child(folderPreviewFrame);
-        const folderPreviewRow = new Adw.PreferencesRow({
-            activatable: false,
-            selectable: false,
-        });
-        folderPreviewRow.set_child(folderPreviewAspect);
-        folderPreviewGroup.add(folderPreviewRow);
-        leftBox.append(folderPreviewGroup);
+        folderBox.append(folderGroup);
 
         const updateFolderInfo = () => {
             const folder = readFolderConfig(settings);
             const capacity = folder.rows * folder.columns;
-            folderInfo.label =
-                `${folder.rows} × ${folder.columns} = ${capacity} apps per page · ` +
-                `gap ${folder.rowSpacing}×${folder.columnSpacing} px · ` +
-                `${folder.showNames ? 'labels shown' : 'labels hidden'} · ` +
-                'dialog fits the configured grid';
-            folderDa.queue_draw();
+            const title = folder.titleSize > 0
+                ? formatMessage(_('{size} px'), {size: folder.titleSize})
+                : _('system');
+            folderInfo.label = formatMessage(
+                _('{rows} × {columns} = {capacity} apps per page · gap {rowGap}×{colGap} px · title {title} · {labels} · dialog fits the configured grid'), {
+                    rows: folder.rows,
+                    columns: folder.columns,
+                    capacity,
+                    rowGap: folder.rowSpacing,
+                    colGap: folder.columnSpacing,
+                    title,
+                    labels: folder.showNames
+                        ? _('labels shown') : _('labels hidden'),
+                });
         };
         for (const key of [
             'folder-rows',
             'folder-columns',
             'folder-row-spacing',
             'folder-column-spacing',
+            'folder-title-size',
             'show-app-names',
             'use-presets',
             'preset-level',
@@ -923,40 +973,21 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateFolderInfo();
 
-        const behaviorGroup = new Adw.PreferencesGroup({
-            title: 'Page layout',
-        });
-        const namesRow = new Adw.SwitchRow({
-            title: 'Show application names',
-            subtitle: 'Show labels under app and folder icons',
-        });
-        settings.bind('show-app-names', namesRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
-        behaviorGroup.add(namesRow);
-        const consolidateRow = new Adw.SwitchRow({
-            title: 'Consolidate app pages',
-            subtitle: 'Fill earlier pages and permanently save the new app order',
-        });
-        settings.bind('consolidate-pages', consolidateRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
-        behaviorGroup.add(consolidateRow);
-        leftBox.append(behaviorGroup);
-
         const snapshotsGroup = new Adw.PreferencesGroup({
-            title: 'Layout snapshots',
-            description: 'Save layout settings, app order and folder contents',
+            title: _('Saved layouts'),
+            description: _('Save layout settings, app order and folder contents'),
         });
         const snapshotNameRow = new Adw.EntryRow({
-            title: 'Snapshot name',
+            title: _('Snapshot name'),
         });
         snapshotsGroup.add(snapshotNameRow);
 
         const saveSnapshotRow = new Adw.ActionRow({
-            title: 'Save current layout',
-            subtitle: 'Captures the current grid, labels and app arrangement',
+            title: _('Save current layout'),
+            subtitle: _('Captures the current grid, labels and app arrangement'),
         });
         const saveSnapshotButton = new Gtk.Button({
-            label: 'Save',
+            label: _('Save'),
             valign: Gtk.Align.CENTER,
             css_classes: ['suggested-action'],
         });
@@ -965,20 +996,20 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         snapshotsGroup.add(saveSnapshotRow);
 
         const snapshotsCombo = new Adw.ComboRow({
-            title: 'Saved layouts',
+            title: _('Saved layouts'),
         });
         snapshotsGroup.add(snapshotsCombo);
 
         const snapshotActionRow = new Adw.ActionRow({
-            title: 'Selected layout',
-            subtitle: 'Restoring replaces the grid, app order and folders',
+            title: _('Selected layout'),
+            subtitle: _('Restoring replaces the grid, app order and folders'),
         });
         const restoreSnapshotButton = new Gtk.Button({
-            label: 'Restore',
+            label: _('Restore'),
             valign: Gtk.Align.CENTER,
         });
         const deleteSnapshotButton = new Gtk.Button({
-            label: 'Delete',
+            label: _('Delete'),
             valign: Gtk.Align.CENTER,
             css_classes: ['destructive-action'],
         });
@@ -1000,7 +1031,20 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         });
         snapshotStatusRow.set_child(snapshotStatus);
         snapshotsGroup.add(snapshotStatusRow);
-        leftBox.append(snapshotsGroup);
+        snapshotsBox.append(snapshotsGroup);
+
+        const advancedGroup = new Adw.PreferencesGroup({
+            title: _('Page consolidation'),
+            description: _('Permanently rewrites the saved app order'),
+        });
+        const consolidateRow = new Adw.SwitchRow({
+            title: _('Consolidate app pages'),
+            subtitle: _('Fill earlier pages and permanently save the new app order'),
+        });
+        settings.bind('consolidate-pages', consolidateRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        advancedGroup.add(consolidateRow);
+        advancedBox.append(advancedGroup);
 
         const shellSettings = Gio.Settings.new('org.gnome.shell');
         const folderSettings = Gio.Settings.new(
@@ -1011,8 +1055,10 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 settings.get_string('layout-snapshots'));
             const model = new Gtk.StringList();
             for (const snapshot of snapshots) {
-                model.append(
-                    `${snapshot.name} — ${snapshotLabel(snapshot)}`);
+                model.append(formatMessage(_('{name} — {summary}'), {
+                    name: snapshot.name,
+                    summary: snapshotLabel(snapshot, _),
+                }));
             }
             snapshotsCombo.model = model;
             const index = selectId
@@ -1026,9 +1072,13 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             restoreSnapshotButton.sensitive = hasSnapshots;
             deleteSnapshotButton.sensitive = hasSnapshots;
             snapshotStatus.label = hasSnapshots
-                ? `${snapshots.length} saved layout(s)`
-                : 'No saved layouts yet';
-            snapshotNameRow.text = `Layout ${snapshots.length + 1}`;
+                ? formatMessage(_('Saved layouts: {count}'), {
+                    count: snapshots.length,
+                })
+                : _('No saved layouts yet');
+            snapshotNameRow.text = formatMessage(_('Layout {number}'), {
+                number: snapshots.length + 1,
+            });
         };
 
         let snapshots = [];
@@ -1039,12 +1089,16 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
         saveSnapshotButton.connect('clicked', () => {
             if (snapshots.length >= MAX_SNAPSHOTS) {
-                snapshotStatus.label =
-                    `Limit reached (${MAX_SNAPSHOTS}); delete a snapshot first`;
+                snapshotStatus.label = formatMessage(
+                    _('Limit reached ({max}); delete a snapshot first'), {
+                        max: MAX_SNAPSHOTS,
+                    });
                 return;
             }
             const name = snapshotNameRow.text.trim() ||
-                `Layout ${snapshots.length + 1}`;
+                formatMessage(_('Layout {number}'), {
+                    number: snapshots.length + 1,
+                });
             try {
                 const snapshot = captureSnapshot(
                     settings, shellSettings, folderSettings, name);
@@ -1052,9 +1106,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 settings.set_string('layout-snapshots',
                     serializeSnapshots(snapshots));
                 refreshSnapshotRows(snapshot.id);
-                snapshotStatus.label = `Saved “${name}”`;
+                snapshotStatus.label = formatMessage(
+                    _('Saved “{name}”'), {name});
             } catch (error) {
-                snapshotStatus.label = `Could not save: ${error.message}`;
+                snapshotStatus.label = formatMessage(
+                    _('Could not save: {error}'), {error: error.message});
             }
         });
 
@@ -1066,7 +1122,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             settings.set_string('layout-snapshots',
                 serializeSnapshots(snapshots));
             refreshSnapshotRows();
-            snapshotStatus.label = `Deleted “${snapshot.name}”`;
+            snapshotStatus.label = formatMessage(
+                _('Deleted “{name}”'), {name: snapshot.name});
         });
 
         restoreSnapshotButton.connect('clicked', () => {
@@ -1074,10 +1131,11 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             if (!snapshot)
                 return;
             const dialog = new Gtk.AlertDialog({
-                message: `Restore “${snapshot.name}”?`,
-                detail: 'This replaces the current layout settings, ' +
-                    'app order and folder contents.',
-                buttons: ['Cancel', 'Restore'],
+                message: formatMessage(_('Restore “{name}”?'), {
+                    name: snapshot.name,
+                }),
+                detail: _('This replaces the current layout settings, app order and folder contents.'),
+                buttons: [_('Cancel'), _('Restore')],
                 cancel_button: 0,
                 default_button: 0,
             });
@@ -1093,19 +1151,26 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 try {
                     restoreSnapshot(
                         settings, shellSettings, folderSettings, snapshot);
-                    snapshotStatus.label =
-                        `Restored “${snapshot.name}”`;
+                    snapshotStatus.label = formatMessage(
+                        _('Restored “{name}”'), {name: snapshot.name});
                 } catch (error) {
-                    snapshotStatus.label =
-                        `Could not restore: ${error.message}`;
+                    snapshotStatus.label = formatMessage(
+                        _('Could not restore: {error}'), {
+                            error: error.message,
+                        });
                 }
             });
         });
 
         const updateVisibility = () => {
             const preset = settings.get_boolean('use-presets');
-            presetsGroup.visible = preset;
-            customGroup.visible = !preset;
+            comboRow.visible = preset;
+            presetInfoRow.visible = preset;
+            iconSizeRow.visible = !preset;
+            rowsRow.visible = !preset;
+            columnsRow.visible = !preset;
+            gridSpacingRow.visible = !preset;
+            infoRow.visible = !preset;
         };
         connectSignal(cleanupFns, settings,
             'changed::use-presets', updateVisibility);
@@ -1116,8 +1181,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const c = settings.get_int('custom-columns');
             const rsp = settings.get_int('custom-row-spacing');
             const csp = settings.get_int('custom-column-spacing');
-            infoLabel.label =
-                `${r} × ${c} = ${r * c} apps per page, gap ${rsp}×${csp} px`;
+            infoLabel.label = formatMessage(
+                _('{rows} × {columns} = {capacity} apps per page, gap {rowGap}×{colGap} px'), {
+                    rows: r,
+                    columns: c,
+                    capacity: r * c,
+                    rowGap: rsp,
+                    colGap: csp,
+                });
         };
         for (const key of [
             'custom-rows',
@@ -1129,25 +1200,102 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateInfo();
 
-        const controlsScroller = new Gtk.ScrolledWindow({
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
-            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
-            min_content_height: 420,
-            vexpand: true,
-        });
-        controlsScroller.set_child(leftBox);
+        const addNavRow = (group, title, page) => {
+            const row = new Adw.ActionRow({title, activatable: true});
+            row.add_suffix(new Gtk.Image({
+                icon_name: 'go-next-symbolic',
+                valign: Gtk.Align.CENTER,
+                css_classes: ['dim-label'],
+            }));
+            row.connect('activated', () => showPage(page));
+            group.add(row);
+            return row;
+        };
 
-        return {widget: controlsScroller, cleanupFns};
+        const layoutGroup = new Adw.PreferencesGroup({title: _('Layout')});
+        const appGridRow = addNavRow(layoutGroup, _('App grid'), 'grid');
+        const folderRow = addNavRow(layoutGroup, _('Folder dialog'), 'folder');
+
+        const optionsGroup = new Adw.PreferencesGroup({title: _('Options')});
+        const namesRow = new Adw.SwitchRow({
+            title: _('Show application names'),
+            subtitle: _('Show labels under app and folder icons'),
+        });
+        settings.bind('show-app-names', namesRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        optionsGroup.add(namesRow);
+        const snapshotsRow = addNavRow(optionsGroup,
+            _('Layout snapshots'), 'snapshots');
+        const advancedRow = addNavRow(optionsGroup, _('Advanced'), 'advanced');
+        rootBox.append(layoutGroup);
+        rootBox.append(optionsGroup);
+
+        const updateRootRows = () => {
+            const config = readGridConfig(settings);
+            const presetName = _(SIZE_NAMES[settings.get_int('preset-level')] ?? '');
+            const folderTitle = config.folderTitleSize > 0
+                ? formatMessage(_('{size} px'), {
+                    size: config.folderTitleSize,
+                })
+                : _('system');
+            appGridRow.subtitle = config.usePresets
+                ? formatMessage(_('{preset} · {icon} px'), {
+                    preset: presetName,
+                    icon: config.iconSize,
+                })
+                : formatMessage(_('Custom · {icon} px · {rows}×{columns}'), {
+                    icon: config.iconSize,
+                    rows: config.rows,
+                    columns: config.columns,
+                });
+            folderRow.subtitle = formatMessage(
+                _('{rows}×{columns} · title {title}'), {
+                    rows: config.folderRows,
+                    columns: config.folderColumns,
+                    title: folderTitle,
+                });
+            const saved = parseSnapshots(
+                settings.get_string('layout-snapshots')).length;
+            snapshotsRow.subtitle = saved
+                ? formatMessage(_('{count} saved'), {count: saved})
+                : _('No saved layouts');
+            advancedRow.subtitle = _('Page consolidation rewrites the app order');
+        };
+        for (const key of [
+            'use-presets', 'preset-level', 'custom-icon-size',
+            'custom-rows', 'custom-columns',
+            'folder-rows', 'folder-columns', 'folder-title-size',
+            'layout-snapshots',
+        ]) {
+            connectSignal(cleanupFns, settings, `changed::${key}`,
+                updateRootRows);
+        }
+        updateRootRows();
+
+        addPage('root', null, rootBox);
+        addPage('grid', _('App grid'), gridBox);
+        addPage('folder', _('Folder dialog'), folderBox);
+        addPage('snapshots', _('Layout snapshots'), snapshotsBox);
+        addPage('advanced', _('Advanced'), advancedBox);
+        stack.set_visible_child_name('root');
+
+        return {widget: stack, cleanupFns};
     }
 
     _buildPreviewPane(settings, window) {
         const cleanupFns = [];
 
-        const rightBox = new Gtk.Box({
+        const previewRoot = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
             margin_top: 16, margin_bottom: 16,
             margin_start: 24, margin_end: 24,
+        });
+        const overviewPage = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            hexpand: true,
+            vexpand: true,
         });
 
         const screenLabel = new Gtk.Label({
@@ -1203,10 +1351,116 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 clampCustomDimension(ps.fitCols));
         });
 
-        rightBox.append(screenLabel);
-        rightBox.append(previewClamp);
-        rightBox.append(fitLabel);
-        rightBox.append(fitButton);
+        overviewPage.append(screenLabel);
+        overviewPage.append(previewClamp);
+        overviewPage.append(fitLabel);
+        overviewPage.append(fitButton);
+
+        const folderLabel = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.CENTER,
+            wrap: true,
+            css_classes: ['dim-label', 'caption'],
+        });
+
+        const folderFrame = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            overflow: Gtk.Overflow.HIDDEN,
+        });
+        folderFrame.add_css_class('card');
+        folderFrame.add_css_class('appgrid-fit-wallpaper-preview');
+
+        const folderDa = new Gtk.DrawingArea();
+        folderDa.set_content_width(560);
+        folderDa.set_content_height(315);
+        folderDa.set_hexpand(true);
+        folderDa.set_vexpand(true);
+        folderDa.set_draw_func((_area, cr, drawW, drawH) => {
+            const config = readGridConfig(settings);
+            drawFolderPreviewSection(cr, 0, 0, drawW, drawH, {
+                iconSize: config.iconSize,
+                folderRows: config.folderRows,
+                folderColumns: config.folderColumns,
+                folderRowSpacing: config.folderRowSpacing,
+                folderColumnSpacing: config.folderColumnSpacing,
+                folderTitleSize: config.folderTitleSize,
+                showNames: config.showNames,
+            });
+        });
+        folderFrame.append(folderDa);
+
+        const folderAspect = new Gtk.AspectFrame({
+            ratio: 16 / 9,
+            obey_child: false,
+            hexpand: true,
+        });
+        folderAspect.set_child(folderFrame);
+
+        const folderClamp = new Adw.Clamp({
+            maximum_size: 720,
+            tightening_threshold: 480,
+            hexpand: true,
+        });
+        folderClamp.set_child(folderAspect);
+
+        const folderCaption = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.CENTER,
+            wrap: true,
+            css_classes: ['dim-label', 'caption'],
+        });
+
+        const folderPage = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 4,
+            hexpand: true,
+            vexpand: true,
+        });
+        folderPage.append(folderLabel);
+        folderPage.append(folderClamp);
+        folderPage.append(folderCaption);
+
+        const previewStack = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 160,
+            hexpand: true,
+            vexpand: true,
+        });
+        previewStack.add_named(overviewPage, 'overview');
+        previewStack.add_named(folderPage, 'folder');
+        previewRoot.append(previewStack);
+
+        const setPage = page => {
+            previewStack.set_visible_child_name(
+                page === 'folder' ? 'folder' : 'overview');
+        };
+
+        const updateFolderPreview = () => {
+            const config = readGridConfig(settings);
+            const capacity = config.folderRows * config.folderColumns;
+            const title = config.folderTitleSize > 0
+                ? formatMessage(_('{size} px'), {
+                    size: config.folderTitleSize,
+                })
+                : _('system');
+            folderLabel.label = formatMessage(
+                _('Folder dialog preview · {rows} × {columns}'), {
+                    rows: config.folderRows,
+                    columns: config.folderColumns,
+                });
+            folderCaption.label = formatMessage(
+                _('{capacity} apps per page · gap {rowGap}×{colGap} px · {icon} px icons · title {title} · {labels}'), {
+                    capacity,
+                    rowGap: config.folderRowSpacing,
+                    colGap: config.folderColumnSpacing,
+                    icon: config.iconSize,
+                    title,
+                    labels: config.showNames
+                        ? _('labels shown') : _('labels hidden'),
+                });
+            folderDa.queue_draw();
+        };
+        updateFolderPreview();
 
         const ps = {monitorW: 1920, monitorH: 1080};
         const shellSettings = Gio.Settings.new('org.gnome.shell');
@@ -1376,37 +1630,62 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             aspectFrame.ratio = mW / mH;
             const areaPrefix = measuredItemsMatch
-                ? 'Live Shell geometry'
-                : runtimeLayout ? 'Live icon area · open Overview for exact placement'
-                    : 'Estimated icon area · open Overview for exact placement';
-            screenLabel.label =
-                `Monitor: ${mW} × ${mH}  ·  ${areaPrefix}: ${layout.iconAreaW} × ${layout.iconAreaH}`;
+                ? _('Live Shell geometry')
+                : runtimeLayout ? _('Live icon area · open Overview for exact placement')
+                    : _('Estimated icon area · open Overview for exact placement');
+            screenLabel.label = formatMessage(
+                _('Monitor: {width} × {height}  ·  {area}: {iconWidth} × {iconHeight}'), {
+                    width: mW,
+                    height: mH,
+                    area: areaPrefix,
+                    iconWidth: layout.iconAreaW,
+                    iconHeight: layout.iconAreaH,
+                });
 
             if (usePresets) {
-                fitLabel.label =
-                    `Balanced fit: ${fitRows}×${fitCols} = ` +
-                    `${fitRows * fitCols} capacity  ·  ` +
-                    `${itemCount} apps on current page`;
+                fitLabel.label = formatMessage(
+                    _('Balanced fit: {rows}×{columns} = {capacity} capacity  ·  {count} apps on current page'), {
+                        rows: fitRows,
+                        columns: fitCols,
+                        capacity: fitRows * fitCols,
+                        count: itemCount,
+                    });
             } else {
                 const gridSize = computeGridPixelSize(
                     rows, columns, cellSize, rowGap, colGap);
                 const fitSize = computeGridPixelSize(
                     fitRows, fitCols, cellSize, rowGap, colGap);
-                let text =
-                    `Grid: ${rows}×${columns} = ${rows * columns} apps  ·  ` +
-                    `${gridSize.width}×${gridSize.height}px  ·  ` +
-                    `${Math.round(gridSize.width / layout.iconAreaW * 100)}%×` +
-                    `${Math.round(gridSize.height / layout.iconAreaH * 100)}% of icon area\n` +
-                    `Capacity estimate: ${fitRows}×${fitCols} = ${fitRows * fitCols} apps  ·  ` +
-                    `${fitSize.width}×${fitSize.height}px`;
+                let text = formatMessage(
+                    _('Grid: {rows}×{columns} = {apps} apps  ·  {width}×{height}px  ·  {percentW}%×{percentH}% of icon area'), {
+                        rows,
+                        columns,
+                        apps: rows * columns,
+                        width: gridSize.width,
+                        height: gridSize.height,
+                        percentW: Math.round(
+                            gridSize.width / layout.iconAreaW * 100),
+                        percentH: Math.round(
+                            gridSize.height / layout.iconAreaH * 100),
+                    });
+                text += '\n' + formatMessage(
+                    _('Capacity estimate: {rows}×{columns} = {apps} apps  ·  {width}×{height}px'), {
+                        rows: fitRows,
+                        columns: fitCols,
+                        apps: fitRows * fitCols,
+                        width: fitSize.width,
+                        height: fitSize.height,
+                    });
                 if (rows !== fitRows || columns !== fitCols)
-                    text += '\nConfigured grid differs from the capacity estimate';
+                    text += '\n' + _('Configured grid differs from the capacity estimate');
                 fitLabel.label = text;
             }
 
             const targetRows = clampCustomDimension(fitRows);
             const targetColumns = clampCustomDimension(fitCols);
-            fitButton.label = `Fit ${targetRows}×${targetColumns}`;
+            fitButton.label = formatMessage(_('Fit {rows}×{columns}'), {
+                rows: targetRows,
+                columns: targetColumns,
+            });
             fitButton.visible = !usePresets &&
                 (rows !== targetRows || columns !== targetColumns);
 
@@ -1416,6 +1695,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         for (const key of SETTINGS_KEYS) {
             connectSignal(cleanupFns, settings,
                 `changed::${key}`, updatePreview);
+            connectSignal(cleanupFns, settings,
+                `changed::${key}`, updateFolderPreview);
         }
         connectSignal(cleanupFns, settings,
             `changed::${PREVIEW_LAYOUT_KEY}`, updatePreview);
@@ -1502,8 +1783,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             min_content_height: 420,
             vexpand: true,
         });
-        previewScroller.set_child(rightBox);
+        previewScroller.set_child(previewRoot);
 
-        return {widget: previewScroller, cleanupFns};
+        return {widget: previewScroller, cleanupFns, setPage};
     }
 }

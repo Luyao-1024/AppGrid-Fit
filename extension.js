@@ -581,6 +581,7 @@ export default class AppGridSizeExtension extends Extension {
             folderColumns: folder.columns,
             folderRowSpacing: folder.rowSpacing,
             folderColumnSpacing: folder.columnSpacing,
+            folderTitleSize: folder.titleSize,
             showNames: folder.showNames,
         }
         if (this._settings.get_boolean('use-presets')) {
@@ -644,6 +645,7 @@ export default class AppGridSizeExtension extends Extension {
             columns: config.folderColumns,
             rowSpacing: config.folderRowSpacing,
             columnSpacing: config.folderColumnSpacing,
+            titleSize: config.folderTitleSize,
             pagePadding: createFolderPagePadding(),
         }
     }

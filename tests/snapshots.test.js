@@ -80,3 +80,15 @@ test('snapshot labels summarise the saved layout', () => {
     assert.match(snapshotLabel(hidden), /no names$/)
     assert.equal(snapshotLabel(null), 'no names')
 })
+
+test('snapshot labels use the supplied translator', () => {
+    const translate = value => ({
+        folder: '文件夹', names: '名称', 'no names': '无名称',
+    })[value] ?? value
+    assert.equal(snapshotLabel(snapshot('a'), translate),
+        '64px · 6×9 · 文件夹 3×4 · 名称')
+    const hidden = snapshot('b')
+    hidden.summary.showNames = false
+    assert.equal(snapshotLabel(hidden, translate),
+        '64px · 6×9 · 文件夹 3×4 · 无名称')
+})

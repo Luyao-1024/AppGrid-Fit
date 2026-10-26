@@ -344,6 +344,24 @@ function contentFolderGrid(count = 4, cellSize = 100) {
     return grid
 }
 
+function styledActor(extra = {}) {
+    return {
+        style: '',
+        get_style() {
+            return this.style
+        },
+        set_style(value) {
+            this.style = value
+        },
+        ensure_style() {},
+        ...extra,
+    }
+}
+
+function fontNode(units) {
+    return {get_font: () => ({get_size: () => units})}
+}
+
 function contentFolderDialog(titleHeight = 80) {
     const box = {
         style: '',
@@ -357,11 +375,21 @@ function contentFolderDialog(titleHeight = 80) {
         },
         queue_relayout() {},
     }
+    const ghost = {x: 36, width: 40}
     return {
         _viewBox: box,
         _entryBox: {
             get_preferred_height: () => [titleHeight, titleHeight],
+            get_first_child: () => ghost,
         },
+        _folderNameLabel: styledActor({
+            get_theme_node: () => fontNode(27302),
+        }),
+        _entry: styledActor({width: -1}),
+        _editButton: styledActor({
+            width: 40,
+            get_theme_node: () => fontNode(15018),
+        }),
         ensure_style() {},
     }
 }
@@ -425,20 +453,76 @@ test('folder dialogs fit the configured grid and restore', () => {
     assert.equal(lm.columns_per_page, 3)
     assert.deepEqual(lm.page_padding, PAGE_PADDING)
     assert.equal(dialog._viewBox.style,
-        'width: 378px; height: 444px;')
+        'width: 444px; height: 444px;')
+    assert.equal(dialog._entry.width, 290)
     assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
         style: '',
         width: null,
         height: null,
+        entry: dialog._entry,
+        title: {
+            label: dialog._folderNameLabel,
+            edit: dialog._editButton,
+            labelStyle: '',
+            entryStyle: '',
+            editStyle: '',
+            labelFont: 27302 / 1024,
+            editFont: 15018 / 1024,
+        },
     })
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style, '')
     assert.equal(dialog._viewBox.width, -1)
     assert.equal(dialog._viewBox.height, -1)
+    assert.equal(dialog._entry.width, -1)
     assert.equal(lm.rows_per_page, 3)
     assert.equal(lm.columns_per_page, 3)
     assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
+    assert.equal(dialogOriginals.size, 0)
+})
+
+test('folder title size scales the title and edit button and restores', () => {
+    const grid = contentFolderGrid(4, 100)
+    const dialog = contentFolderDialog(80)
+    dialog._folderNameLabel.style = 'color: red;'
+    const icon = {view: {_grid: grid}, _dialog: dialog}
+    const appDisplay = {_folderIcons: [icon]}
+    const originals = new Map()
+    const dialogOriginals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 3,
+        columns: 3,
+        rowSpacing: 8,
+        columnSpacing: 14,
+        pagePadding: PAGE_PADDING,
+        titleSize: 20,
+    }
+
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.equal(dialog._folderNameLabel.style,
+        'color: red; font-size: 20px;')
+    assert.equal(dialog._entry.style, 'font-size: 20px;')
+    assert.equal(dialog._editButton.style, 'font-size: 11px;')
+
+    config.titleSize = 0
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.equal(dialog._folderNameLabel.style, 'color: red;')
+    assert.equal(dialog._entry.style, '')
+    assert.equal(dialog._editButton.style, '')
+
+    config.titleSize = 24
+    applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
+    assert.equal(dialog._folderNameLabel.style,
+        'color: red; font-size: 24px;')
+    assert.equal(dialog._entry.style, 'font-size: 24px;')
+    assert.equal(dialog._editButton.style, 'font-size: 13px;')
+
+    restoreFolderLayouts(appDisplay, originals, dialogOriginals)
+    assert.equal(dialog._folderNameLabel.style, 'color: red;')
+    assert.equal(dialog._entry.style, '')
+    assert.equal(dialog._editButton.style, '')
     assert.equal(dialogOriginals.size, 0)
 })
 
@@ -487,6 +571,7 @@ test('paged folders leave Shell page padding untouched', () => {
     applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
     const lm = grid.layout_manager
     assert.deepEqual(lm.page_padding, PAGE_PADDING)
+    assert.equal(dialog._entry.width, 290)
 
     lm.page_padding = {top: 24, right: 60, bottom: 24, left: 60}
     lm._pages = [
@@ -496,6 +581,7 @@ test('paged folders leave Shell page padding untouched', () => {
     applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
     assert.deepEqual(lm.page_padding, {top: 24, right: 60, bottom: 24, left: 60})
     assert.equal(dialog._viewBox.style, '')
+    assert.equal(dialog._entry.width, -1)
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.deepEqual(lm.page_padding, ORIGINAL_PAGE_PADDING)
@@ -589,18 +675,30 @@ test('fixed-size adaptive folder dialogs fit the configured grid and restore', (
 
     applyFolderLayouts(appDisplay, config, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style,
-        'width: 378px; height: 444px;')
-    assert.equal(dialog._viewBox.width, 378)
+        'width: 444px; height: 444px;')
+    assert.equal(dialog._viewBox.width, 444)
     assert.equal(dialog._viewBox.height, 444)
+    assert.equal(dialog._entry.width, 290)
     assert.deepEqual(dialogOriginals.get(dialog._viewBox), {
         style: '',
         width: 550,
         height: 550,
+        entry: dialog._entry,
+        title: {
+            label: dialog._folderNameLabel,
+            edit: dialog._editButton,
+            labelStyle: '',
+            entryStyle: '',
+            editStyle: '',
+            labelFont: 27302 / 1024,
+            editFont: 15018 / 1024,
+        },
     })
 
     restoreFolderLayouts(appDisplay, originals, dialogOriginals)
     assert.equal(dialog._viewBox.style, '')
     assert.equal(dialog._viewBox.width, 550)
     assert.equal(dialog._viewBox.height, 550)
+    assert.equal(dialog._entry.width, -1)
     assert.equal(dialogOriginals.size, 0)
 })

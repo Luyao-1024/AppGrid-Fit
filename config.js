@@ -12,7 +12,7 @@ export const SETTINGS_KEYS = [
     'custom-row-spacing', 'custom-column-spacing',
     'folder-rows', 'folder-columns',
     'folder-row-spacing', 'folder-column-spacing',
-    'show-app-names',
+    'folder-title-size', 'show-app-names',
 ]
 
 export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
@@ -20,6 +20,7 @@ export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
 export const FOLDER_MIN_DIMENSION = 2
 export const FOLDER_MAX_DIMENSION = 6
 export const FOLDER_MAX_SPACING = 64
+export const FOLDER_MAX_TITLE_SIZE = 48
 export const FOLDER_DIALOG_PAGE_PADDING = 24
 
 export const PRESETS = [
@@ -65,6 +66,7 @@ export function readFolderConfig(settings) {
         columns: settings.get_int('folder-columns'),
         rowSpacing: settings.get_int('folder-row-spacing'),
         columnSpacing: settings.get_int('folder-column-spacing'),
+        titleSize: settings.get_int('folder-title-size'),
         showNames: settings.get_boolean('show-app-names'),
     }
 }
