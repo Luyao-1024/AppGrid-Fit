@@ -59,6 +59,11 @@ calculations used by both runtime and preferences code.
 | `UNCONSTRAINED_SPACING` | `-1` | max_row/column_spacing value to disable limit |
 | `DEFAULT_PAGE_CAPACITY` | `24` | Shell's default 4×6 boundary used to split fallback page counts |
 | `FALLBACK_PREVIEW_TILE_OVERHEAD` | `53` | Fallback Shell tile overhead when no live preferred size exists |
+| `FOLDER_MIN_DIMENSION` | `2` | Minimum folder dialog rows/columns |
+| `FOLDER_MAX_DIMENSION` | `6` | Maximum folder dialog rows/columns |
+| `FOLDER_MAX_SPACING` | `64` | Maximum folder dialog gap |
+| `MAX_SNAPSHOTS` | `20` | Maximum saved layout snapshots (`snapshots.js`) |
+| `SNAPSHOT_VERSION` | `1` | Snapshot JSON schema version (`snapshots.js`) |
 
 ### Shell layout estimation constants (prefs.js only)
 
@@ -90,6 +95,7 @@ Used by `estimateGridArea()` to approximate the GNOME Shell overview layout:
 | Constant | Used by |
 |---|---|
 | `SETTINGS_KEYS` | `_connectSettings()` / `_buildPreviewPane()` — connect to all setting changes |
+| `SNAPSHOT_SETTINGS_KEYS` | Snapshot capture/restore — extension settings saved verbatim |
 | `ENFORCED_PROPERTIES` | `_setupEnforcers()` — connect `notify::*` on layout manager |
 | `SIZE_NAMES` | `['Large', 'Medium', 'Small', 'Tiny']` — preset display labels |
 | `PRESETS` | `config.js` — explicit, stable preset definitions |
@@ -138,15 +144,43 @@ and restored on disable or partial failure. Resolve the grid's theme style befor
 defaults because spacing may still be zero during Shell startup. Do not require grid modes
 to find a compatible grid.
 
-### Folder dialog icon sizing
+### Folder dialogs
 
 GNOME Shell creates a separate 3×3 `FolderGrid` for folder dialogs; it is not part of
 `appDisplay._grid`, so it keeps its adaptive icon size by default. `_apply()` and the
-overview `shown` handler call `setFolderIconSizes()` for every
-`appDisplay._folderIcons[*].view._grid` and store the previous `fixed_icon_size` in
-`_originalFolders`. `IconGridLayout.adaptToSize()` only re-evaluates the icon size after the
-page dimensions change, so the helper also clears `_pageWidth`/`_pageHeight` and queues a
-relayout. Disable and partial-failure restoration put Shell's original adaptive value back.
+overview `shown` handler call `applyFolderLayouts()` for every
+`appDisplay._folderIcons[*].view._grid`. The helper stores icon size, spacing, alignment,
+CSS limits and the original mode/fixed dimensions in `_originalFolders` on first use, then
+sets the configured icon size, rows/columns, gaps, unconstrained spacing limits and
+START/CENTER alignment. `IconGridLayout.adaptToSize()` only re-evaluates the icon size after
+the page dimensions change, so the helper also clears `_pageWidth`/`_pageHeight` and queues a
+relayout. Ubuntu's adaptive layout derives spacing from `_iconSize`, so
+`_setupFolderEnforcers()` re-applies the configured row/column spacing and limits through
+`notify::*` handlers. Disable and partial-failure restoration put the original values back;
+when the captured spacing is zero (folder grids may not be styled yet), it falls back to the
+grid's CSS theme spacing.
+
+### Application name visibility
+
+`show-app-names` controls labels below app, folder and folder-dialog icons.
+`applyAppNameVisibility()` snapshots each `item.icon.label.visible` value in
+`_originalLabels` and sets it to the configured value; `getIconLabels()` walks both the main
+grid and every folder grid. Labels are applied before `_syncIconSize()` and tile measurement
+so the preferred square tile and balanced fit reflect the visible content. Restoration runs
+on disable and partial failure. The preferences preview omits label bars when names are
+hidden.
+
+### Layout snapshots
+
+Snapshots are stored as JSON in the `layout-snapshots` GSettings string. Each entry keeps
+the extension settings as `{type, value}` GVariant text (so booleans, ints and strings round
+trip without type guessing), the complete `org.gnome.shell app-picker-layout` value, every
+`org.gnome.desktop.app-folders` child and its per-folder keys, plus a summary used by the
+combo row. `snapshots.js` validates, sorts newest-first, caps the list at 20 and provides the
+display label. Restoring writes folder definitions first, then `app-picker-layout`, then the
+extension settings; Shell's `PageManager` reloads saved pages from the setting change and
+the extension's normal apply/reflow pass settles the grid. The preferences window asks for
+confirmation before replacing the current layout.
 
 ### CSS override defense
 
@@ -256,14 +290,16 @@ enable()
   │   ├─ _readGridConfig()               — read settings → config object {iconSize, rows, columns, rowGap, colGap, autoFit}
   │   ├─ _computeAutoFit(grid, lm, config) — if autoFit, override rows/columns from allocation
   │   ├─ _applyLayout(grid, lm, config)  — set all layout_manager properties
-  │   ├─ _applyFolderIconSizes()         — apply icon size to every folder dialog grid
+  │   ├─ _applyFolderLayouts()           — apply icon size/rows/columns/gaps to folder dialog grids
+  │   ├─ _setupFolderEnforcers()         — defend folder spacing against adaptive style resets
+  │   ├─ _applyAppNameVisibility()       — show/hide labels in grid and folder dialogs
   │   ├─ _setupEnforcers(lm)             — connect notify handlers to defend against CSS resets
   │   ├─ restorePersistedPageOrder(...)   — first-run: rebuild order saved before Shell's 24-item split
   │   ├─ reflowPages(lm, {consolidate})  — rebuild overflow in order; optionally fill vacancies
   │   ├─ syncPageManagerPages(...)       — mirror rebuilt page boundaries in memory
   │   └─ _forceRelayout(grid)            — reset cached page size, trigger re-allocation
   ├─ Main.overview.connect('showing')     — cancel settle timer, mark unsettled, apply
-  ├─ Main.overview.connect('shown')       — re-apply folder icon sizes, schedule settled publish (600 ms)
+  ├─ Main.overview.connect('shown')       — re-apply folder layout/names, schedule settled publish (600 ms)
   ├─ Main.overview.connect('hiding')      — cancel settle timer, clear settled state
   └─ Main.layoutManager.connect('monitors-changed')
 
@@ -274,7 +310,7 @@ disable()
   ├─ _disconnectTheme()
   ├─ _disconnectSettings()  — disconnect + null _settings
   ├─ _disconnectGridBindings() — disconnect allocation + notify handlers
-  ├─ _restoreOriginalLayout() — restore saved _original values, folder icon sizes, sync icon size, reflow, relayout
+  ├─ _restoreOriginalLayout() — restore main and folder layouts, labels, icon size; reflow; relayout
   └─ _resetState()
 
 _scheduleApply()       — coalesce settings/theme/allocation changes into one idle apply
@@ -283,14 +319,17 @@ _warnOnce(message)     — log each missing/unsupported-grid message until the n
 _getControlsManager()  — Main.overview?._overview?._controls ?? null
 _findGrid()            — _getControlsManager()?.appDisplay?._grid ?? null
 _getAppDisplay()       — _getControlsManager()?.appDisplay ?? null
-_applyFolderIconSizes() / _restoreFolderIconSizes() — apply or restore icon sizes on folder dialog grids
+_applyFolderLayouts() / _restoreFolderLayouts() — apply or restore folder dialog grid layout
+_applyAppNameVisibility() / _restoreAppNameVisibility() — toggle icon labels
+_setupFolderEnforcers() / _disconnectFolderEnforcers() — defend folder spacing/limits
 ```
 
 Original layout values are stored in `this._original` for the current layout manager and
 restored on disable or after a partial apply failure. The snapshot includes
 `effectiveIconSize` (`lm._iconSize`) for adaptive layouts without `_findBestIconSize()`.
 Folder grid originals are stored separately in `this._originalFolders`, keyed by layout
-manager.
+manager. Label visibility originals live in `this._originalLabels`, and
+`_folderEnforcerIds` tracks the folder `notify::*` handlers.
 
 ---
 
@@ -307,14 +346,18 @@ scrolling so short displays can still reach every row.
 ```
 fillPreferencesWindow(window)
   └─ paned (Gtk.Paned, horizontal, position 420)
-       ├─ _buildControlsPane(settings) → {widget: controlsScroller, cleanupFns[]}
+       ├─ _buildControlsPane(settings, window) → {widget: controlsScroller, cleanupFns[]}
        │    └─ controlsScroller (Gtk.ScrolledWindow) → controlsBox (Gtk.Box, vertical, margin 24/16)
        │         ├─ modeGroup    — "Use preset sizes" SwitchRow
        │         ├─ presetsGroup — ComboRow + info label  (visible when preset=true)
        │         ├─ customGroup  — 5 SpinRows + info label (visible when preset=false)
-       │         └─ behaviorGroup — optional page consolidation switch
-       └─ _buildPreviewPane(settings) → {widget: rightBox, cleanupFns[]}
-            └─ rightBox (Gtk.Box, vertical, margin 24/16)
+       │         ├─ folderGroup  — 4 folder SpinRows + capacity/gap/label info
+       │         ├─ folderPreviewGroup — card with folderDa (folder dialog preview)
+       │         ├─ behaviorGroup — app-name switch + optional page consolidation
+       │         └─ snapshotsGroup — name entry, save row, saved-layout ComboRow,
+       │              restore/delete buttons, status label
+       └─ _buildPreviewPane(settings) → {widget: previewScroller, cleanupFns[]}
+            └─ previewScroller (Gtk.ScrolledWindow) → rightBox (Gtk.Box, vertical, margin 24/16)
                  ├─ screenLabel — "Monitor: W×H · Icon area: ~aw×ah"
                  ├─ Adw.Clamp → AspectFrame → previewFrame (Cairo grid preview, css 'card')
                  │    └─ DrawingArea — draws overview preview via section functions
@@ -330,7 +373,10 @@ from the window's `close-request` signal. Every signal is disconnected from its 
 | Function | Purpose |
 |---|---|
 | `createSpinRow(settings, key, title, {lower, upper, step, page})` | Creates an `Adw.SpinRow` with `Gtk.Adjustment`, binds to GSettings key |
-| `readGridConfig(settings)` | Reads preset or custom settings → `{iconSize, rows, columns, rowGap, colGap, usePresets}` |
+| `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, showNames}` |
+| `drawFolderPreviewSection(...)` | Draws the folder dialog preview with rows/columns/gaps/icon size and optional labels |
+| `captureSnapshot` / `restoreSnapshot` | Stores/restores GVariant settings, app-picker layout and folder definitions |
+| `refreshSnapshotRows` | Rebuilds the saved-layout ComboRow from `parseSnapshots()` |
 
 ### Grid preview (DrawingArea)
 
@@ -410,7 +456,7 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 
 ## GSettings Schema
 
-9 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+15 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
@@ -422,6 +468,12 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 | `custom-columns` | int | `9` | 2–20 |
 | `custom-row-spacing` | int | `12` | 0–200 |
 | `custom-column-spacing` | int | `12` | 0–200 |
+| `folder-rows` | int | `3` | 2–6 |
+| `folder-columns` | int | `3` | 2–6 |
+| `folder-row-spacing` | int | `12` | 0–64 |
+| `folder-column-spacing` | int | `12` | 0–64 |
+| `show-app-names` | bool | `true` | — |
+| `layout-snapshots` | string | `''` | Internal JSON snapshot store |
 | `runtime-preview-layout` | string | `''` | Internal live Shell layout snapshot for the preview |
 
 After modifying the schema XML, recompile: `glib-compile-schemas schemas/`
@@ -436,6 +488,7 @@ gnome-extensions pack --force \
   --extra-source=config.js \
   --extra-source=gridPages.js \
   --extra-source=gridLayout.js \
+  --extra-source=snapshots.js \
   --extra-source=LICENSE \
   "$(pwd)"
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
@@ -446,30 +499,35 @@ gnome-extensions enable appgrid-size@luyao
 ### QEMU compatibility verification (default acceptance)
 
 ```bash
-scripts/verify-qemu.sh                        # ubuntu-24.04, ubuntu-26.04, fedora-44
+scripts/verify-qemu.sh                  # ubuntu-24.04, ubuntu-26.04, fedora-44, fedora-51
 scripts/verify-qemu.sh --case ubuntu-26.04
 scripts/verify-qemu.sh --rebuild-golden --case fedora-44
 ```
 
-Base images come from the Tsinghua mirror. The first run provisions a golden qcow2 per case
+Base images come from the Tsinghua mirror, except `fedora-51`, which uses Fedora's upstream
+rawhide image because Tsinghua does not mirror rawhide. Its guest packages come from the
+NJU mirror. The first run provisions a golden qcow2 per case
 once; every later run boots a fresh overlay backed by the golden image and deletes the overlay
 afterwards, so extension settings, page order and the guest desktop always start clean. The
 cache is `${XDG_CACHE_HOME:-~/.cache}/appgrid-qemu` (`images/`, `golden/`, `keys/`, `runs/`,
 `logs/`). A stamp records the provisioning hash, base-image size/mtime and SSH-key
 fingerprint; changing any of them rebuilds the golden image.
 
-Guest packages install from the Tsinghua mirror as well. Ubuntu's cloud-init `apt` section
+Guest packages install from the Tsinghua mirror, except `fedora-51` (NJU). Ubuntu's cloud-init `apt` section
 rewrites primary and security URIs before `package_update`; Fedora's boot command comments
 out `metalink=` in `fedora.repo`, `fedora-updates.repo` and `fedora-updates-testing.repo` and
 replaces the placeholder base URL, and disables the Cisco OpenH264 repository that Tsinghua
 does not mirror. The finalize step then rejects any active apt source or Fedora repository
 that does not point at `mirrors.tuna.tsinghua.edu.cn`, so provisioning fails instead of
-silently falling back to upstream mirrors.
+silently falling back to upstream mirrors. `fedora-51` sets `MIRROR_MODE=nju`, rewrites
+rawhide repositories to `mirror.nju.edu.cn` (Tsinghua does not mirror rawhide), and validates
+that host instead. Its base image still comes from Fedora's upstream rawhide directory.
 
 `scripts/qemu-guest-probe.sh` unpacks the extension and schema into an isolated XDG tree,
 starts `gnome-shell --headless --wayland --no-x11 --unsafe-mode` under `dbus-run-session`,
 verifies `Main.layoutManager.primaryMonitor` matches `MONITOR`, enables the extension, and
-runs `scripts/vm-probe.py`. `--no-x11` is required: without it, libgvc synchronously connects
+runs `scripts/vm-probe.py`. Each case also passes `EXPECTED_SHELL_MAJOR` so the guest fails
+early if the image does not actually run the intended GNOME Shell major (46, 50 or 51). `--no-x11` is required: without it, libgvc synchronously connects
 to Xwayland before the compositor can service it, wedging the Shell main loop.
 `--unsafe-mode` replaces the old helper extension. `HOME`, `XDG_*`, `GSETTINGS_SCHEMA_DIR`
 and `DISPLAY=:999` must be exported **before** `dbus-run-session` so activated services such
@@ -482,7 +540,8 @@ restore capacity.
 
 The probe backs up and restores extension settings, `org.gnome.shell app-picker-layout`, and
 (when `TEST_FOLDER=1`) the temporary folder settings used for the 32 px/96 px folder-dialog
-checks and the disable-restoration check. Acceptance is the probe exit status; a failing run
+checks, folder rows/columns/gaps, app-name visibility in the grid and folder, and the
+disable-restoration check. Acceptance is the probe exit status; a failing run
 copies the guest work directory and Shell log into `<cache>/logs/`, and the run overlay is
 still discarded unless `--keep-overlay` is used.
 
@@ -535,10 +594,11 @@ Restart the graphical session after installing a new build.
 |------|---------|
 | `config.js` | Shared presets, setting keys, fit and pixel-size calculations |
 | `gridPages.js` | Testable saved-order restoration, page overflow, and optional consolidation adapter |
-| `gridLayout.js` | Capability detection, dimension overrides, and restoration for upstream and Ubuntu layouts |
-| `extension.js` | Enable/disable, find grid, override layout, balanced fit, persist pages |
+| `gridLayout.js` | Capability detection, dimension overrides, folder layout/name helpers, restoration for upstream and Ubuntu layouts |
+| `snapshots.js` | Validation, ordering, cap and display labels for saved layout snapshots |
+| `extension.js` | Enable/disable, find grid, override layout, balanced fit, folder layout, names, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
-| `tests/*.test.js` | Node unit tests for shared calculations and page reflow |
+| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/names and snapshots |
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
 | `scripts/validate-extension.mjs` | Local metadata, runtime API, import, and ZIP review checks used by CI |
 | `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation assertions for both layouts |
@@ -558,7 +618,10 @@ Restart the graphical session after installing a new build.
 
 ---
 
-## GNOME Shell 50 Source References
+## GNOME Shell 46–51 Source References
+
+GNOME Shell 51 keeps the same private grid, folder and `PageManager` APIs used here; the
+`fedora-51` QEMU case is the runtime check for that release.
 
 - `js/ui/iconGrid.js` — `IconGridLayout` (GObject props, `_calculateSpacing`, `adaptToSize`,
   `vfunc_allocate`), `IconGrid` (`vfunc_style_changed`, `setGridModes`,
@@ -574,8 +637,9 @@ Restart the graphical session after installing a new build.
 
 1. **Private Shell APIs**: Grid discovery, reflow, icon updates, and persistence depend on
    private GNOME Shell members. Capability checks prevent common partial failures. Automated
-   QEMU acceptance covers Ubuntu 24.04 (GNOME 46), Ubuntu 26.04 (adaptive layout), and Fedora
-   44 (GNOME 50) headless; other Shell releases still require a smoke test.
+   QEMU acceptance covers Ubuntu 24.04 (GNOME 46), Ubuntu 26.04 (adaptive layout), Fedora
+   44 (GNOME 50) and Fedora rawhide (GNOME 51) headless; other Shell releases still require a
+   smoke test.
 2. **Fixed icon size clips labels**: Icons smaller than the chosen size still render at the
    fixed size; very small icons may clip labels.
 3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new

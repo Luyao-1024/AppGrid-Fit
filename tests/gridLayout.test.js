@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+    applyAppNameVisibility,
+    applyFolderLayouts,
     getFolderGrids,
     getGridLayoutMode,
+    getIconLabels,
     readThemeSpacing,
-    restoreFolderIconSizes,
+    restoreAppNameVisibility,
+    restoreFolderLayouts,
     restoreGridLayout,
     saveGridLayout,
-    setFolderIconSizes,
     setGridDimensions,
 } from '../gridLayout.js'
 
@@ -37,6 +40,11 @@ function modeGrid() {
         _currentMode: 0,
         setGridModes(modes) {
             this._gridModes = modes
+            const mode = modes?.[0]
+            if (mode) {
+                this.layout_manager.rows_per_page = mode.rows
+                this.layout_manager.columns_per_page = mode.columns
+            }
         },
     }
 }
@@ -160,24 +168,42 @@ test('incomplete or broken layout APIs are rejected before applying', () => {
     assert.equal(getGridLayoutMode(incomplete), null)
 })
 
-function folderGrid(originalSize) {
+function folderGrid(originalSize = -1) {
     return {
         layout_manager: {
             fixed_icon_size: originalSize,
             _iconSize: 64,
             _pageWidth: 548,
             _pageHeight: 476,
+            rows_per_page: 3,
+            columns_per_page: 3,
+            row_spacing: 12,
+            column_spacing: 12,
+            max_row_spacing: 36,
+            max_column_spacing: 36,
+            page_valign: 0,
+            page_halign: 0,
         },
+        _gridModes: [{rows: 3, columns: 3}],
+        _currentMode: 0,
         relayouts: 0,
+        setGridModes(modes) {
+            this._gridModes = modes
+            const mode = modes?.[0]
+            if (mode) {
+                this.layout_manager.rows_per_page = mode.rows
+                this.layout_manager.columns_per_page = mode.columns
+            }
+        },
         queue_relayout() {
             this.relayouts += 1
         },
     }
 }
 
-test('folder grids follow the configured icon size and restore', () => {
-    const first = folderGrid(-1)
-    const second = folderGrid(-1)
+test('folder grids follow the configured layout and restore', () => {
+    const first = folderGrid()
+    const second = folderGrid()
     const appDisplay = {
         _folderIcons: [
             {view: {_grid: first}},
@@ -188,39 +214,106 @@ test('folder grids follow the configured icon size and restore', () => {
         ],
     }
     const originals = new Map()
+    const config = {
+        iconSize: 48,
+        rows: 4,
+        columns: 5,
+        rowSpacing: 8,
+        columnSpacing: 14,
+    }
 
     assert.deepEqual(getFolderGrids(appDisplay), [first, second])
     assert.deepEqual(getFolderGrids(null), [])
 
-    setFolderIconSizes(appDisplay, 32, originals)
+    applyFolderLayouts(appDisplay, config, originals)
     for (const grid of [first, second]) {
-        assert.equal(grid.layout_manager.fixed_icon_size, 32)
+        assert.equal(grid.layout_manager.fixed_icon_size, 48)
+        assert.equal(grid.layout_manager.rows_per_page, 4)
+        assert.equal(grid.layout_manager.columns_per_page, 5)
+        assert.equal(grid.layout_manager.row_spacing, 8)
+        assert.equal(grid.layout_manager.column_spacing, 14)
+        assert.equal(grid.layout_manager.max_row_spacing, -1)
+        assert.equal(grid.layout_manager.max_column_spacing, -1)
+        assert.equal(grid.layout_manager.page_valign, 1)
+        assert.equal(grid.layout_manager.page_halign, 2)
         assert.equal(grid.layout_manager._pageWidth, 0)
         assert.equal(grid.layout_manager._pageHeight, 0)
+        assert.deepEqual(grid._gridModes, [{rows: 4, columns: 5}])
         assert.equal(grid.relayouts, 1)
     }
-    assert.deepEqual([...originals.values()], [-1, -1])
+    assert.deepEqual([...originals.values()].map(item => item.iconSize),
+        [-1, -1])
 
-    setFolderIconSizes(appDisplay, 96, originals)
+    applyFolderLayouts(appDisplay, {...config, iconSize: 96}, originals)
     for (const grid of [first, second])
         assert.equal(grid.layout_manager.fixed_icon_size, 96)
-    assert.deepEqual([...originals.values()], [-1, -1])
-    assert.equal(first.relayouts, 2)
+    assert.deepEqual([...originals.values()].map(item => item.iconSize),
+        [-1, -1])
 
-    restoreFolderIconSizes(appDisplay, originals)
+    restoreFolderLayouts(appDisplay, originals)
     for (const grid of [first, second]) {
         assert.equal(grid.layout_manager.fixed_icon_size, -1)
-        assert.equal(grid.layout_manager._pageWidth, 0)
-        assert.equal(grid.layout_manager._pageHeight, 0)
+        assert.equal(grid.layout_manager.rows_per_page, 3)
+        assert.equal(grid.layout_manager.columns_per_page, 3)
+        assert.equal(grid.layout_manager.row_spacing, 12)
+        assert.equal(grid.layout_manager.column_spacing, 12)
+        assert.equal(grid.layout_manager.max_row_spacing, 36)
+        assert.equal(grid.layout_manager.max_column_spacing, 36)
+        assert.equal(grid.layout_manager.page_valign, 0)
+        assert.equal(grid.layout_manager.page_halign, 0)
+        assert.deepEqual(grid._gridModes, [{rows: 3, columns: 3}])
     }
     assert.equal(originals.size, 0)
-    assert.equal(first.relayouts, 3)
 })
 
 test('folder grids without fixed icon sizing are left alone', () => {
     const grid = {layout_manager: {}, queue_relayout() {}}
     const originals = new Map()
-    setFolderIconSizes({_folderIcons: [{view: {_grid: grid}}]}, 32, originals)
+    applyFolderLayouts(
+        {_folderIcons: [{view: {_grid: grid}}]},
+        {iconSize: 32, rows: 3, columns: 3, rowSpacing: 8, columnSpacing: 8},
+        originals)
     assert.equal(originals.size, 0)
-    restoreFolderIconSizes({_folderIcons: [{view: {_grid: grid}}]}, originals)
+    restoreFolderLayouts({_folderIcons: [{view: {_grid: grid}}]}, originals)
+})
+
+function iconWithLabel(visible = true) {
+    return {icon: {label: {visible}}}
+}
+
+test('app name visibility covers the grid and folder dialogs', () => {
+    const mainLabel = {visible: true}
+    const folderLabel = {visible: true}
+    const hiddenLabel = {visible: false}
+    const mainGrid = [
+        {icon: {label: mainLabel}},
+        {icon: {label: folderLabel}},
+        {},
+    ]
+    const folderGrid = [{icon: {label: hiddenLabel}}]
+    folderGrid.layout_manager = {}
+    const appDisplay = {
+        _grid: mainGrid,
+        _folderIcons: [{view: {_grid: folderGrid}}],
+    }
+    const originals = new Map()
+
+    assert.deepEqual(getIconLabels(appDisplay),
+        [mainLabel, folderLabel, hiddenLabel])
+    applyAppNameVisibility(appDisplay, false, originals)
+    assert.equal(mainLabel.visible, false)
+    assert.equal(folderLabel.visible, false)
+    assert.equal(hiddenLabel.visible, false)
+    assert.deepEqual([...originals.values()], [true, true, false])
+
+    applyAppNameVisibility(appDisplay, true, originals)
+    assert.equal(mainLabel.visible, true)
+    assert.equal(folderLabel.visible, true)
+    assert.equal(hiddenLabel.visible, true)
+
+    restoreAppNameVisibility(appDisplay, originals)
+    assert.equal(mainLabel.visible, true)
+    assert.equal(folderLabel.visible, true)
+    assert.equal(hiddenLabel.visible, false)
+    assert.equal(originals.size, 0)
 })

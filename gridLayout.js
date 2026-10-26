@@ -1,4 +1,7 @@
 const FIXED_DIMENSIONS = ['_fixedRows', '_fixedCols']
+const UNCONSTRAINED_SPACING = -1
+const ALIGN_START = 1
+const ALIGN_CENTER = 2
 
 export function readThemeSpacing(node) {
     if (!node || typeof node.get_length !== 'function' ||
@@ -101,28 +104,118 @@ export function getFolderGrids(appDisplay) {
     return grids
 }
 
-export function setFolderIconSizes(appDisplay, iconSize, originals) {
+export function getIconLabels(appDisplay) {
+    const grids = [appDisplay?._grid, ...getFolderGrids(appDisplay)]
+    const labels = []
+    for (const grid of grids) {
+        if (!grid)
+            continue
+        for (const item of grid) {
+            const label = item?.icon?.label
+            if (label && !labels.includes(label))
+                labels.push(label)
+        }
+    }
+    return labels
+}
+
+export function applyAppNameVisibility(appDisplay, showNames, originals) {
+    for (const label of getIconLabels(appDisplay)) {
+        if (!originals.has(label))
+            originals.set(label, label.visible)
+        if (label.visible !== showNames)
+            label.visible = showNames
+    }
+}
+
+export function restoreAppNameVisibility(appDisplay, originals) {
+    for (const label of getIconLabels(appDisplay)) {
+        if (originals.has(label))
+            label.visible = originals.get(label)
+    }
+    originals.clear()
+}
+
+function themeFolderSpacing(grid) {
+    try {
+        if (!grid.get_stage?.())
+            return null
+        grid.ensure_style()
+        return readThemeSpacing(grid.get_theme_node())
+    } catch (_error) {
+        return null
+    }
+}
+
+function saveFolderState(grid) {
+    const lm = grid.layout_manager
+    let layout = null
+    try {
+        layout = saveGridLayout(grid)
+    } catch (_error) {}
+    const theme = themeFolderSpacing(grid)
+    const optional = {}
+    for (const property of ['max_row_spacing', 'max_column_spacing',
+        'page_valign', 'page_halign']) {
+        if (property in lm)
+            optional[property] = lm[property]
+    }
+    return {
+        iconSize: lm.fixed_icon_size,
+        rowSpacing: lm.row_spacing || theme?.rowSpacing || 0,
+        columnSpacing: lm.column_spacing || theme?.columnSpacing || 0,
+        optional,
+        layout,
+    }
+}
+
+function applyFolderAlignment(lm) {
+    if ('max_row_spacing' in lm)
+        lm.max_row_spacing = UNCONSTRAINED_SPACING
+    if ('max_column_spacing' in lm)
+        lm.max_column_spacing = UNCONSTRAINED_SPACING
+    if ('page_valign' in lm)
+        lm.page_valign = ALIGN_START
+    if ('page_halign' in lm)
+        lm.page_halign = ALIGN_CENTER
+}
+
+export function applyFolderLayouts(appDisplay, config, originals) {
     for (const grid of getFolderGrids(appDisplay)) {
         const lm = grid.layout_manager
         if (!('fixed_icon_size' in lm))
             continue
         if (!originals.has(lm))
-            originals.set(lm, lm.fixed_icon_size)
-        if (lm.fixed_icon_size === iconSize)
-            continue
-        lm.fixed_icon_size = iconSize
+            originals.set(lm, saveFolderState(grid))
+        if (getGridLayoutMode(grid))
+            setGridDimensions(grid, config.rows, config.columns)
+        lm.fixed_icon_size = config.iconSize
+        lm.row_spacing = config.rowSpacing
+        lm.column_spacing = config.columnSpacing
+        applyFolderAlignment(lm)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()
     }
 }
 
-export function restoreFolderIconSizes(appDisplay, originals) {
+export function restoreFolderLayouts(appDisplay, originals) {
     for (const grid of getFolderGrids(appDisplay)) {
         const lm = grid.layout_manager
-        if (!originals.has(lm))
+        const original = originals.get(lm)
+        if (!original)
             continue
-        lm.fixed_icon_size = originals.get(lm)
+        const theme = themeFolderSpacing(grid)
+        lm.fixed_icon_size = original.iconSize
+        lm.row_spacing = original.rowSpacing || theme?.rowSpacing || 0
+        lm.column_spacing = original.columnSpacing ||
+            theme?.columnSpacing || 0
+        for (const [property, value] of Object.entries(original.optional ?? {})) {
+            if (property in lm)
+                lm[property] = value
+        }
+        if (original.layout)
+            restoreGridLayout(grid, original.layout)
         lm._pageWidth = 0
         lm._pageHeight = 0
         grid.queue_relayout()

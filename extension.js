@@ -12,6 +12,7 @@ import {
     UNCONSTRAINED_SPACING,
     computeGridFit,
     computePreviewTileSize,
+    readFolderConfig,
 } from './config.js'
 import {
     reflowPages,
@@ -19,12 +20,15 @@ import {
     syncPageManagerPages,
 } from './gridPages.js'
 import {
+    applyAppNameVisibility,
+    applyFolderLayouts,
+    getFolderGrids,
     getGridLayoutMode,
     readThemeSpacing,
-    restoreFolderIconSizes,
+    restoreAppNameVisibility,
+    restoreFolderLayouts,
     restoreGridLayout,
     saveGridLayout,
-    setFolderIconSizes,
     setGridDimensions,
 } from './gridLayout.js'
 
@@ -51,7 +55,8 @@ export default class AppGridSizeExtension extends Extension {
             })
         this._overviewShownId = Main.overview.connect('shown', () => {
             this._overviewShowing = false
-            this._applyFolderIconSizes()
+            this._applyFolderLayouts()
+            this._applyAppNameVisibility()
             this._scheduleSettledPublish()
         })
         this._overviewHidingId =
@@ -80,6 +85,9 @@ export default class AppGridSizeExtension extends Extension {
         this._settings = null
         this._original = null
         this._originalFolders = new Map()
+        this._originalLabels = new Map()
+        this._folderEnforcerIds = new Map()
+        this._folderSignalIds = new Map()
         this._activeConfig = null
         this._applied = false
         this._notifyIds = []
@@ -164,6 +172,8 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _disconnectGridBindings() {
+        this._disconnectFolderSignals()
+        this._disconnectFolderEnforcers()
         if (this._allocationGrid && this._allocationId)
             this._allocationGrid.disconnect(this._allocationId)
         this._allocationGrid = null
@@ -526,6 +536,14 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _readGridConfig() {
+        const folder = readFolderConfig(this._settings)
+        const folderConfig = {
+            folderRows: folder.rows,
+            folderColumns: folder.columns,
+            folderRowSpacing: folder.rowSpacing,
+            folderColumnSpacing: folder.columnSpacing,
+            showNames: folder.showNames,
+        }
         if (this._settings.get_boolean('use-presets')) {
             const preset = PRESETS[this._settings.get_int('preset-level')]
             return {
@@ -535,6 +553,7 @@ export default class AppGridSizeExtension extends Extension {
                 rowGap: preset.gap,
                 columnGap: preset.gap,
                 autoFit: true,
+                ...folderConfig,
             }
         }
         return {
@@ -544,6 +563,7 @@ export default class AppGridSizeExtension extends Extension {
             rowGap: this._settings.get_int('custom-row-spacing'),
             columnGap: this._settings.get_int('custom-column-spacing'),
             autoFit: false,
+            ...folderConfig,
         }
     }
 
@@ -577,15 +597,119 @@ export default class AppGridSizeExtension extends Extension {
         lm.page_halign = Clutter.ActorAlign.CENTER
     }
 
-    _applyFolderIconSizes() {
+    _applyFolderLayouts() {
         if (!this._applied || !this._activeConfig)
             return
-        setFolderIconSizes(this._getAppDisplay(), this._activeConfig.iconSize,
-            this._originalFolders)
+        const config = this._activeConfig
+        applyFolderLayouts(this._getAppDisplay(), {
+            iconSize: config.iconSize,
+            rows: config.folderRows,
+            columns: config.folderColumns,
+            rowSpacing: config.folderRowSpacing,
+            columnSpacing: config.folderColumnSpacing,
+        }, this._originalFolders)
     }
 
-    _restoreFolderIconSizes() {
-        restoreFolderIconSizes(this._getAppDisplay(), this._originalFolders)
+    _applyAppNameVisibility() {
+        if (!this._applied || !this._activeConfig)
+            return
+        applyAppNameVisibility(this._getAppDisplay(),
+            this._activeConfig.showNames, this._originalLabels)
+    }
+
+    _restoreFolderLayouts() {
+        this._disconnectFolderEnforcers()
+        restoreFolderLayouts(this._getAppDisplay(), this._originalFolders)
+    }
+
+    _restoreAppNameVisibility() {
+        restoreAppNameVisibility(this._getAppDisplay(), this._originalLabels)
+    }
+
+    _setupFolderEnforcers() {
+        const grids = getFolderGrids(this._getAppDisplay())
+        const active = new Set(grids.map(grid => grid.layout_manager))
+        for (const [lm, ids] of this._folderEnforcerIds) {
+            if (active.has(lm))
+                continue
+            for (const id of ids) {
+                try {
+                    lm.disconnect(id)
+                } catch (_error) {}
+            }
+            this._folderEnforcerIds.delete(lm)
+        }
+
+        for (const lm of active) {
+            if (this._folderEnforcerIds.has(lm))
+                continue
+            const ids = []
+            for (const [property, key, desired] of [
+                ['row-spacing', 'row_spacing',
+                    () => this._activeConfig.folderRowSpacing],
+                ['column-spacing', 'column_spacing',
+                    () => this._activeConfig.folderColumnSpacing],
+                ['max-row-spacing', 'max_row_spacing',
+                    () => UNCONSTRAINED_SPACING],
+                ['max-column-spacing', 'max_column_spacing',
+                    () => UNCONSTRAINED_SPACING],
+            ]) {
+                if (!(property in lm))
+                    continue
+                ids.push(lm.connect(`notify::${property}`, () => {
+                    if (!this._applied || !this._activeConfig)
+                        return
+                    const value = desired()
+                    if (lm[key] !== value)
+                        lm[key] = value
+                }))
+            }
+            this._folderEnforcerIds.set(lm, ids)
+        }
+    }
+
+    _disconnectFolderEnforcers() {
+        for (const [lm, ids] of this._folderEnforcerIds) {
+            for (const id of ids) {
+                try {
+                    lm.disconnect(id)
+                } catch (_error) {}
+            }
+        }
+        this._folderEnforcerIds.clear()
+    }
+
+    _connectFolderSignals() {
+        const icons = this._getAppDisplay()?._folderIcons
+        if (!Array.isArray(icons))
+            return
+        for (const [icon, id] of this._folderSignalIds) {
+            if (icons.includes(icon))
+                continue
+            try {
+                icon.disconnect(id)
+            } catch (_error) {}
+            this._folderSignalIds.delete(icon)
+        }
+        for (const icon of icons) {
+            if (!icon || this._folderSignalIds.has(icon) ||
+                typeof icon.connect !== 'function')
+                continue
+            try {
+                const id = icon.connect('apps-changed',
+                    () => this._scheduleApply())
+                this._folderSignalIds.set(icon, id)
+            } catch (_error) {}
+        }
+    }
+
+    _disconnectFolderSignals() {
+        for (const [icon, id] of this._folderSignalIds) {
+            try {
+                icon.disconnect(id)
+            } catch (_error) {}
+        }
+        this._folderSignalIds.clear()
     }
 
     _setupEnforcers(lm) {
@@ -655,6 +779,8 @@ export default class AppGridSizeExtension extends Extension {
 
             let config = this._readGridConfig()
             lm.fixed_icon_size = config.iconSize
+            applyAppNameVisibility(this._getAppDisplay(), config.showNames,
+                this._originalLabels)
             this._syncIconSize(lm)
             config = {
                 ...config,
@@ -667,7 +793,9 @@ export default class AppGridSizeExtension extends Extension {
             const consolidate = this._settings.get_boolean('consolidate-pages')
             this._activeConfig = {...config, consolidate}
             this._applyLayout(grid, lm, config)
-            this._applyFolderIconSizes()
+            this._applyFolderLayouts()
+            this._setupFolderEnforcers()
+            this._connectFolderSignals()
             this._setupEnforcers(lm)
 
             if (this._restoredOrderLayoutManager !== lm &&
@@ -709,7 +837,8 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _restoreOriginalLayout() {
-        this._restoreFolderIconSizes()
+        this._restoreFolderLayouts()
+        this._restoreAppNameVisibility()
         if (!this._applied || !this._original)
             return
 

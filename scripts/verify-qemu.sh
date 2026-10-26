@@ -34,7 +34,7 @@ RUN_TIMEOUT=${RUN_TIMEOUT:-900}
 KEEP_OVERLAY=${KEEP_OVERLAY:-0}
 SSH_PORT=${SSH_PORT:-}
 
-ALL_CASES=(ubuntu-24.04 ubuntu-26.04 fedora-44)
+ALL_CASES=(ubuntu-24.04 ubuntu-26.04 fedora-44 fedora-51)
 CASES=()
 REBUILD_GOLDEN=0
 CURRENT_QEMU_PID=
@@ -173,26 +173,47 @@ configure_case() {
     case "$CASE" in
         ubuntu-24.04)
             FAMILY=ubuntu
+            MIRROR_MODE=tuna
             IMAGE_NAME=noble-server-cloudimg-amd64.img
             IMAGE_URL=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/noble/current/noble-server-cloudimg-amd64.img
             EXPECTED_LAYOUT_MODE=modes
+            EXPECTED_SHELL_MAJOR=46
             SUDO_GROUP=sudo
             PACKAGES='gnome-shell gjs dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
             ;;
         ubuntu-26.04)
             FAMILY=ubuntu
+            MIRROR_MODE=tuna
             IMAGE_NAME=resolute-server-cloudimg-amd64.img
             IMAGE_URL=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/resolute/current/resolute-server-cloudimg-amd64.img
             EXPECTED_LAYOUT_MODE=adaptive
+            EXPECTED_SHELL_MAJOR=50
             SUDO_GROUP=sudo
             PACKAGES='gnome-shell dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
             ;;
         fedora-44)
             FAMILY=fedora
+            MIRROR_MODE=tuna
+            FEDORA_RELEASE=44
             FEDORA_IMAGE_DIR=https://mirrors.tuna.tsinghua.edu.cn/fedora/releases/44/Cloud/x86_64/images
             IMAGE_NAME=$(fedora_image_name)
             IMAGE_URL="$FEDORA_IMAGE_DIR/$IMAGE_NAME"
             EXPECTED_LAYOUT_MODE=modes
+            EXPECTED_SHELL_MAJOR=50
+            SUDO_GROUP=wheel
+            PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
+            ;;
+        fedora-51)
+            # Tsinghua does not mirror rawhide; use the upstream image and the
+            # NJU Fedora mirror for package downloads.
+            FAMILY=fedora
+            MIRROR_MODE=nju
+            FEDORA_RELEASE=Rawhide
+            FEDORA_IMAGE_DIR=https://download.fedoraproject.org/pub/fedora/linux/development/rawhide/Cloud/x86_64/images
+            IMAGE_NAME=$(fedora_image_name)
+            IMAGE_URL="$FEDORA_IMAGE_DIR/$IMAGE_NAME"
+            EXPECTED_LAYOUT_MODE=modes
+            EXPECTED_SHELL_MAJOR=51
             SUDO_GROUP=wheel
             PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
             ;;
@@ -201,6 +222,11 @@ configure_case() {
             return 1
             ;;
     esac
+    case "$MIRROR_MODE" in
+        tuna) MIRROR_HOST=mirrors.tuna.tsinghua.edu.cn ;;
+        nju) MIRROR_HOST=mirror.nju.edu.cn ;;
+        *) MIRROR_HOST= ;;
+    esac
     BASE_IMAGE="$IMAGES/$IMAGE_NAME"
     GOLDEN="$GOLDEN_DIR/$CASE.qcow2"
     STAMP="$GOLDEN_DIR/$CASE.stamp"
@@ -208,16 +234,25 @@ configure_case() {
 
 fedora_image_name() {
     local cached name
-    cached=$(ls -1 "$IMAGES"/Fedora-Cloud-Base-Generic-44-*.x86_64.qcow2 \
+    cached=$(ls -1 "$IMAGES"/Fedora-Cloud-Base-Generic-"$FEDORA_RELEASE"-*.x86_64.qcow2 \
         2>/dev/null | sort -V | tail -1 || true)
     if [ -n "$cached" ]; then
         basename "$cached"
         return
     fi
     name=$(curl -fsSL --max-time 30 "$FEDORA_IMAGE_DIR" 2>/dev/null |
-        grep -oE 'Fedora-Cloud-Base-Generic-44-[^"<]*x86_64\.qcow2' |
+        grep -oE "Fedora-Cloud-Base-Generic-$FEDORA_RELEASE-[^\"<]*x86_64\\.qcow2" |
         sort -uV | tail -1 || true)
-    printf '%s\n' "${name:-Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2}"
+    if [ -n "$name" ]; then
+        printf '%s\n' "$name"
+        return
+    fi
+    if [ "$FEDORA_RELEASE" = 44 ]; then
+        printf '%s\n' Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+        return
+    fi
+    echo "Could not determine the Fedora $FEDORA_RELEASE Cloud image" >&2
+    return 1
 }
 
 download_base() {
@@ -390,12 +425,14 @@ finalize_script() {
     cat <<'EOF'
 #!/bin/bash
 set -e
+MIRROR_MODE=__MIRROR_MODE__
+MIRROR_HOST=__MIRROR_HOST__
 for command in gnome-shell dbus-run-session glib-compile-schemas \
     gsettings gdbus dconf gnome-extensions unzip python3; do
     command -v "$command" >/dev/null
 done
 test -f /usr/share/applications/appgrid-test-48.desktop
-if [ -d /etc/apt/sources.list.d ]; then
+if [ "$MIRROR_MODE" = tuna ] && [ -d /etc/apt/sources.list.d ]; then
     sources=$(grep -hE '^(deb |URIs:)' \
         /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
         /etc/apt/sources.list.d/*.sources 2>/dev/null || true)
@@ -409,19 +446,16 @@ if [ -d /etc/apt/sources.list.d ]; then
         exit 1
     fi
 fi
-if [ -d /etc/yum.repos.d ]; then
+if [ "$MIRROR_MODE" != upstream ] && [ -d /etc/yum.repos.d ]; then
     for repo in fedora fedora-updates fedora-updates-testing; do
         file="/etc/yum.repos.d/$repo.repo"
-        if [ ! -f "$file" ]; then
-            echo "Missing Fedora repository file: $file" >&2
-            exit 1
-        fi
+        [ -f "$file" ] || continue
         if grep -q '^metalink=' "$file"; then
-            echo "Active metalink in $file; the Tsinghua mirror is not pinned" >&2
+            echo "Active metalink in $file; $MIRROR_HOST is not pinned" >&2
             exit 1
         fi
-        if ! grep -q '^baseurl=https://mirrors.tuna.tsinghua.edu.cn/fedora' "$file"; then
-            echo "$file does not use the Tsinghua mirror" >&2
+        if ! grep -q "^baseurl=https://$MIRROR_HOST/fedora" "$file"; then
+            echo "$file does not use $MIRROR_HOST" >&2
             exit 1
         fi
     done
@@ -451,10 +485,10 @@ apt:
       uri: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
 EOF
 )
-    else
-        bootcmd_section=$(cat <<'EOF'
+    elif [ "$MIRROR_MODE" != upstream ]; then
+        bootcmd_section=$(cat <<EOF
 bootcmd:
-  - sh -c 'sed -i -e "s|^metalink=|#metalink=|" -e "s|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.tuna.tsinghua.edu.cn/fedora|" /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo /etc/yum.repos.d/fedora-updates-testing.repo || true; sed -i "s/^enabled=1/enabled=0/" /etc/yum.repos.d/fedora-cisco-openh264.repo 2>/dev/null || true'
+  - sh -c 'sed -i -e "s|^metalink=|#metalink=|" -e "s|^#baseurl=http://download.example/pub/fedora/linux|baseurl=https://$MIRROR_HOST/fedora|" /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora-updates.repo /etc/yum.repos.d/fedora-updates-testing.repo || true; sed -i "s/^enabled=1/enabled=0/" /etc/yum.repos.d/fedora-cisco-openh264.repo 2>/dev/null || true'
 EOF
 )
     fi
@@ -485,7 +519,7 @@ $(provision_script | sed 's/^/      /')
   - path: /usr/local/sbin/appgrid-finalize
     permissions: '0755'
     content: |
-$(finalize_script | sed 's/^/      /')
+$(finalize_script | sed -e "s/__MIRROR_MODE__/$MIRROR_MODE/" -e "s/__MIRROR_HOST__/$MIRROR_HOST/" | sed 's/^/      /')
 runcmd:
   - [bash, /usr/local/sbin/appgrid-write-test-apps]
   - [bash, /usr/local/sbin/appgrid-finalize]
@@ -641,7 +675,7 @@ import zipfile
 from pathlib import Path
 root, output = map(Path, sys.argv[1:])
 required = ['metadata.json', 'extension.js', 'prefs.js', 'config.js',
-            'gridPages.js', 'gridLayout.js', 'LICENSE']
+            'gridPages.js', 'gridLayout.js', 'snapshots.js', 'LICENSE']
 schema = root / 'schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml'
 missing = [name for name in required if not (root / name).is_file()]
 if not schema.is_file():
@@ -723,7 +757,7 @@ run_case() {
     mapfile -t ssh_args < <(ssh_opts "$port")
     set +e
     timeout "$RUN_TIMEOUT" ssh "${ssh_args[@]}" tester@127.0.0.1 \
-        "cd /tmp/appgrid-probe && EXPECTED_LAYOUT_MODE='$EXPECTED_LAYOUT_MODE' MONITOR='$MONITOR' EXTENSION_UUID='$UUID' bash qemu-guest-probe.sh '$remote_zip' vm-probe.py" \
+        "cd /tmp/appgrid-probe && EXPECTED_LAYOUT_MODE='$EXPECTED_LAYOUT_MODE' EXPECTED_SHELL_MAJOR='$EXPECTED_SHELL_MAJOR' MONITOR='$MONITOR' EXTENSION_UUID='$UUID' bash qemu-guest-probe.sh '$remote_zip' vm-probe.py" \
         2>&1 | tee "$run_dir/probe.log"
     status=${PIPESTATUS[0]}
     set -e

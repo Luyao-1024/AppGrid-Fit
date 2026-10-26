@@ -2,10 +2,13 @@
 
 ## Unreleased
 
-- Added an isolated QEMU acceptance harness with cached golden images and disposable per-run overlays, covering Ubuntu 24.04, Ubuntu 26.04 and Fedora 44 without touching the host desktop.
-- Pinned guest package installation to the Tsinghua mirror for both apt and dnf, with provisioning-time checks that fail if an active remaining source points upstream.
+- Added GNOME Shell 51 support and a Fedora rawhide QEMU case that verifies the extension against GNOME Shell 51.1 without touching the host desktop.
+- Folder dialogs are now fully configurable: icon size follows the main grid, with independent rows, columns, row/column spacing, exact-gap alignment and CSS limit removal. The preferences window draws a dedicated folder-dialog preview and the probe checks 32 px/96 px child icons, configured dimensions/gaps and restoration on disable.
+- Added a **Show application names** switch that hides labels under apps, folders and folder-dialog children; the main and folder previews omit label bars when disabled.
+- Added named layout snapshots: up to 20 saves of the grid settings, `app-picker-layout`, folder definitions and visibility settings, with a combo selector, confirmation before restore, and delete support.
+- Added an isolated QEMU acceptance harness with cached golden images and disposable per-run overlays, covering Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Fedora rawhide (GNOME 51) without touching the host desktop.
+- Pinned guest package installation to Chinese mirrors: Tsinghua for Ubuntu and Fedora 44, NJU for rawhide, with provisioning-time checks that fail if an active remaining source points elsewhere.
 - Defaulted the QEMU acceptance guest to a 1920×1080 virtual monitor, with `MONITOR` still available as an override.
-- Folder dialogs now use the configured icon size for their child icons instead of Shell's adaptive 64 px default, restore the original sizing on disable, and are covered by 32 px/96 px and disable-restoration QEMU assertions.
 - Enabled/disabled the extension through `Main.extensionManager` in the probe so headless runs no longer depend on the `gnome-extensions` D-Bus service.
 - Documented the golden-image cache, reset semantics and host dependencies, and added shell/Python syntax checks to CI.
 

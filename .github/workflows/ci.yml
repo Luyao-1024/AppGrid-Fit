@@ -63,6 +63,7 @@ jobs:
             --extra-source=config.js \
             --extra-source=gridPages.js \
             --extra-source=gridLayout.js \
+            --extra-source=snapshots.js \
             --extra-source=LICENSE \
             . --out-dir="$package_dir"
           archive="$package_dir/appgrid-size@luyao.shell-extension.zip"
@@ -82,6 +83,23 @@ jobs:
           "$RUNNER_TEMP/shexli-venv/bin/pip" install --upgrade pip
           "$RUNNER_TEMP/shexli-venv/bin/pip" install \
             'shexli==0.2.1' 'tree-sitter==0.25.2'
+          # Shexli 0.2.1 predates GNOME Shell 51 and treats every major above
+          # 50 as an implausible future release. Raise only that cutoff; all
+          # other Shexli rules continue to gate the package.
+          "$RUNNER_TEMP/shexli-venv/bin/python" - <<'PY'
+          from pathlib import Path
+          import inspect
+          import shexli
+
+          path = Path(inspect.getfile(shexli)).parent / 'analyzer/rules/metadata.py'
+          source = path.read_text()
+          patched = source.replace('if major > 50:', 'if major > 51:')
+          if patched == source:
+              raise SystemExit('Shexli GNOME 51 cutoff patch did not apply')
+          path.write_text(patched)
+          for cache in path.parent.glob('__pycache__/metadata.*.pyc'):
+              cache.unlink()
+          PY
           report="$RUNNER_TEMP/shexli-report.json"
           "$RUNNER_TEMP/shexli-venv/bin/shexli" \
             --format json "${{ steps.package.outputs.archive }}" > "$report"
