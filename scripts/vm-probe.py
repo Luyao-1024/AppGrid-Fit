@@ -29,8 +29,7 @@ FOLDER_ROWS = 3
 FOLDER_COLUMNS = 4
 FOLDER_ROW_SPACING = 8
 FOLDER_COLUMN_SPACING = 14
-FOLDER_EFFECTIVE_ROWS = 1
-FOLDER_EFFECTIVE_COLUMNS = 4
+FOLDER_PAGE_PADDING = 24
 HOME = Path.home()
 DATA_HOME = Path(os.environ.get('XDG_DATA_HOME', HOME / '.local/share'))
 EXTENSION_DIR = DATA_HOME / 'gnome-shell/extensions' / UUID
@@ -331,6 +330,25 @@ for (const item of items) {{
         cellSize = Math.max(cellSize, width, height);
     }} catch (error) {{}}
 }}
+const itemRects = items.map(item => {{
+    try {{
+        const [x, y] = item.get_transformed_position();
+        const [width, height] = item.get_transformed_size();
+        return {{
+            x: Math.round(x),
+            y: Math.round(y),
+            width: Math.round(width),
+            height: Math.round(height),
+        }};
+    }} catch (error) {{
+        return null;
+    }}
+}});
+let boxPosition = [0, 0];
+try {{
+    if (box)
+        boxPosition = box.get_transformed_position();
+}} catch (error) {{}}
 JSON.stringify({{
     found: !!folder,
     open: dialog?.visible ?? false,
@@ -353,11 +371,14 @@ JSON.stringify({{
     }} : null,
     cssPagePadding: cssPadding,
     dialog: box ? {{
+        x: Math.round(boxPosition[0]),
+        y: Math.round(boxPosition[1]),
         width: Math.round(box.width),
         height: Math.round(box.height),
         style: box.get_style(),
         titleHeight: Math.round(dialog._entryBox?.height ?? 0),
     }} : null,
+    itemRects,
     folderTileLabel: folder?.icon?.label?.visible ?? null,
     mainLabels: [...appDisplay._grid].map(
         child => child.icon?.label?.visible ?? null),
@@ -478,6 +499,33 @@ def check_folder_dialog_fit(state, label):
     return metrics
 
 
+def folder_page_padding_matches(state):
+    padding = state.get('pagePadding') or {}
+    return all(padding.get(side) == FOLDER_PAGE_PADDING for side in (
+        'top', 'right', 'bottom', 'left'))
+
+
+def folder_horizontal_margins(state):
+    dialog = state.get('dialog') or {}
+    rects = [rect for rect in state.get('itemRects') or [] if rect]
+    if not rects or not all(
+            isinstance(dialog.get(key), (int, float))
+            for key in ('x', 'width')):
+        return None
+    left = min(rect['x'] for rect in rects) - dialog['x']
+    right = (dialog['x'] + dialog['width']) - max(
+        rect['x'] + rect['width'] for rect in rects)
+    return {'left': round(left), 'right': round(right)}
+
+
+def folder_margins_balanced(state):
+    margins = folder_horizontal_margins(state)
+    return bool(margins and
+        20 <= margins['left'] <= 34 and
+        20 <= margins['right'] <= 34 and
+        abs(margins['left'] - margins['right']) <= 4)
+
+
 def check_folder_icon_sizes():
     gs_set('folder-rows', FOLDER_ROWS)
     gs_set('folder-columns', FOLDER_COLUMNS)
@@ -493,16 +541,18 @@ def check_folder_icon_sizes():
                 lambda: (state := folder_state()) and
                     state.get('open') and
                     state.get('effectiveIconSize') == size and
-                    state.get('rows') == FOLDER_EFFECTIVE_ROWS and
-                    state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+                    state.get('rows') == FOLDER_ROWS and
+                    state.get('columns') == FOLDER_COLUMNS and
                     state.get('rowSpacing') == FOLDER_ROW_SPACING and
                     state.get('columnSpacing') == FOLDER_COLUMN_SPACING and
+                    folder_page_padding_matches(state) and
                     len(state.get('childIcons') or []) == len(FOLDER_APPS) and
                     all(icon == size for icon in state['childIcons']) and
                     state.get('dialog') and
                     state['dialog']['width'] > 0 and
                     state['dialog']['height'] > 0 and
                     folder_dialog_fits(state) and
+                    folder_margins_balanced(state) and
                     state,
                 f'folder grid at {size}px')
         except RuntimeError as error:
@@ -517,12 +567,17 @@ def check_folder_icon_sizes():
         dialog_heights[size] = state['dialog']['height']
         time.sleep(0.5)
 
-    check('folder layout follows content and settings',
-        state.get('rows') == FOLDER_EFFECTIVE_ROWS and
-        state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+    check('folder grid keeps the configured rows and columns',
+        state.get('rows') == FOLDER_ROWS and
+        state.get('columns') == FOLDER_COLUMNS and
         state.get('rowSpacing') == FOLDER_ROW_SPACING and
         state.get('columnSpacing') == FOLDER_COLUMN_SPACING,
         state)
+    check('folder page padding is uniform around the grid',
+        folder_page_padding_matches(state), state.get('pagePadding'))
+    margins = folder_horizontal_margins(state)
+    check('folder dialog side margins are balanced',
+        folder_margins_balanced(state), margins)
     check('folder dialog height follows the icon size',
         dialog_heights[32] < dialog_heights[96], dialog_heights)
 
@@ -576,15 +631,17 @@ def check_folder_icon_sizes():
         lambda: (state := folder_state()) and
             state.get('open') and
             state.get('itemCount') == len(expanded_apps) and
-            state.get('rows') == 2 and
+            state.get('rows') == FOLDER_ROWS and
             state.get('columns') == FOLDER_COLUMNS and
             state.get('pageCount') == 1 and
             state.get('itemIds') == expanded_apps and
+            folder_page_padding_matches(state) and
             folder_dialog_fits(state) and
             state,
         'six-app folder content fit')
     check('growing folder content merges into one page',
-        expanded['rows'] == 2 and expanded['columns'] == FOLDER_COLUMNS and
+        expanded['rows'] == FOLDER_ROWS and
+        expanded['columns'] == FOLDER_COLUMNS and
         expanded['pageCount'] == 1 and
         expanded['itemIds'] == expanded_apps, expanded)
     check_folder_dialog_fit(expanded, 'six apps')
@@ -616,15 +673,16 @@ def check_folder_icon_sizes():
     merged = wait_for(
         lambda: (state := folder_state()) and
             state.get('open') and
-            state.get('rows') == 2 and
+            state.get('rows') == FOLDER_ROWS and
             state.get('columns') == FOLDER_COLUMNS and
             state.get('pageCount') == 1 and
             state.get('itemIds') == expanded_apps and
+            folder_page_padding_matches(state) and
             folder_dialog_fits(state) and
             state,
         'merged six-app folder')
     check('growing folder capacity merges pages again',
-        merged['pageCount'] == 1 and merged['rows'] == 2 and
+        merged['pageCount'] == 1 and merged['rows'] == FOLDER_ROWS and
         merged['columns'] == FOLDER_COLUMNS and
         merged['itemIds'] == expanded_apps, merged)
     check_folder_dialog_fit(merged, 'paged-to-fit')
@@ -635,9 +693,10 @@ def check_folder_icon_sizes():
             state.get('open') and
             state.get('itemCount') == len(FOLDER_APPS) and
             state.get('itemIds') == FOLDER_APPS and
-            state.get('rows') == FOLDER_EFFECTIVE_ROWS and
-            state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+            state.get('rows') == FOLDER_ROWS and
+            state.get('columns') == FOLDER_COLUMNS and
             state.get('pageCount') == 1 and
+            folder_page_padding_matches(state) and
             folder_dialog_fits(state) and
             state,
         'restored four-app folder')
@@ -677,10 +736,10 @@ def check_folder_icon_sizes():
     reenabled = wait_for(
         lambda: (state := folder_state()) and
             state.get('open') and
-            state.get('rows') == FOLDER_EFFECTIVE_ROWS and
-            state.get('columns') == FOLDER_EFFECTIVE_COLUMNS and
+            state.get('rows') == FOLDER_ROWS and
+            state.get('columns') == FOLDER_COLUMNS and
             state.get('dialog') and
-            state['dialog']['height'] < 500 and
+            folder_page_padding_matches(state) and
             folder_dialog_fits(state) and
             state,
         'folder dialog content fit after re-enable')

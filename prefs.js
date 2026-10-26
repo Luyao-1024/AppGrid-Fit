@@ -7,6 +7,7 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 
 import {
     DEFAULT_PAGE_CAPACITY,
+    FOLDER_DIALOG_PAGE_PADDING,
     FOLDER_MAX_DIMENSION,
     FOLDER_MAX_SPACING,
     FOLDER_MIN_DIMENSION,
@@ -348,7 +349,7 @@ function drawFolderPreviewSection(cr, x, y, w, h, config) {
     } = config;
     const rows = Math.max(1, folderRows);
     const columns = Math.max(1, folderColumns);
-    const panelPad = 18;
+    const panelPad = FOLDER_DIALOG_PAGE_PADDING;
     const titleH = 30;
     const dotsH = 18;
     const tile = iconSize + (showNames ? 34 : 12);
@@ -904,7 +905,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 `${folder.rows} × ${folder.columns} = ${capacity} apps per page · ` +
                 `gap ${folder.rowSpacing}×${folder.columnSpacing} px · ` +
                 `${folder.showNames ? 'labels shown' : 'labels hidden'} · ` +
-                'dialog shrinks to fit its contents';
+                'dialog fits the configured grid';
             folderDa.queue_draw();
         };
         for (const key of [

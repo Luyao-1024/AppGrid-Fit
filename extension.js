@@ -5,6 +5,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js'
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js'
 
 import {
+    FOLDER_DIALOG_PAGE_PADDING,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
@@ -24,6 +25,7 @@ import {
     applyFolderDialogSize,
     applyFolderDialogSizes,
     applyFolderLayouts,
+    enforceFolderPagePadding,
     getFolderGrids,
     getGridLayoutMode,
     readThemeSpacing,
@@ -41,6 +43,16 @@ const ENFORCED_PROPERTIES = [
 ]
 
 const SETTLE_PUBLISH_DELAY_MS = 600
+
+function createFolderPagePadding() {
+    const padding = FOLDER_DIALOG_PAGE_PADDING
+    return new Clutter.Margin({
+        top: padding,
+        right: padding,
+        bottom: padding,
+        left: padding,
+    })
+}
 
 export default class AppGridSizeExtension extends Extension {
     enable() {
@@ -213,7 +225,8 @@ export default class AppGridSizeExtension extends Extension {
             this._dialogSizeId = 0
             if (this._applied && this._activeConfig) {
                 applyFolderDialogSizes(this._getAppDisplay(),
-                    this._folderDialogConfig(), this._originalFolderDialogs)
+                    this._folderDialogConfig(), this._originalFolderDialogs,
+                    this._originalFolders)
             }
             return GLib.SOURCE_REMOVE
         })
@@ -631,6 +644,7 @@ export default class AppGridSizeExtension extends Extension {
             columns: config.folderColumns,
             rowSpacing: config.folderRowSpacing,
             columnSpacing: config.folderColumnSpacing,
+            pagePadding: createFolderPagePadding(),
         }
     }
 
@@ -695,6 +709,14 @@ export default class AppGridSizeExtension extends Extension {
                     const value = desired()
                     if (lm[key] !== value)
                         lm[key] = value
+                }))
+            }
+            if ('page-padding' in lm || 'page_padding' in lm) {
+                ids.push(lm.connect('notify::page-padding', () => {
+                    if (!this._applied || !this._activeConfig)
+                        return
+                    enforceFolderPagePadding(lm,
+                        this._folderDialogConfig().pagePadding)
                 }))
             }
             this._folderEnforcerIds.set(lm, ids)
@@ -765,7 +787,8 @@ export default class AppGridSizeExtension extends Extension {
                 icon._ensureFolderDialog?.()
                 applyFolderDialogSize(icon,
                     extension._folderDialogConfig(),
-                    extension._originalFolderDialogs)
+                    extension._originalFolderDialogs,
+                    extension._originalFolders)
             } catch (_error) {}
             return open.apply(this, args)
         }
