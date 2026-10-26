@@ -4,6 +4,7 @@
 
 - Added GNOME Shell 51 support and a Fedora rawhide QEMU case that verifies the extension against GNOME Shell 51.1 without touching the host desktop.
 - Folder dialogs are now fully configurable: icon size follows the main grid, with independent rows, columns, row/column spacing, exact-gap alignment and CSS limit removal. The preferences window draws a dedicated folder-dialog preview and the probe checks 32 px/96 px child icons, configured dimensions/gaps and restoration on disable.
+- Folder dialogs now shrink to their actual content: a four-app folder uses one row instead of the configured three, the panel width/height follow the tile size, gaps and page padding, and it resizes when app names are hidden or shown. Sized panels keep the configured grid when multiple pages are needed and restore Shell's default size when the extension is disabled.
 - Added a **Show application names** switch that hides labels under apps, folders and folder-dialog children; the main and folder previews omit label bars when disabled.
 - Added named layout snapshots: up to 20 saves of the grid settings, `app-picker-layout`, folder definitions and visibility settings, with a combo selector, confirmation before restore, and delete support.
 - Added an isolated QEMU acceptance harness with cached golden images and disposable per-run overlays, covering Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Fedora rawhide (GNOME 51) without touching the host desktop.
