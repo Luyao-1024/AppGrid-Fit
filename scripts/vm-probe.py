@@ -308,6 +308,14 @@ JSON.stringify({{
     effectiveIconSize: lm?._iconSize ?? null,
     rows: lm?.rows_per_page ?? null,
     columns: lm?.columns_per_page ?? null,
+    rowSpacing: lm?.row_spacing ?? null,
+    columnSpacing: lm?.column_spacing ?? null,
+    folderTileLabel: folder?.icon?.label?.visible ?? null,
+    mainLabels: [...appDisplay._grid].map(
+        child => child.icon?.label?.visible ?? null),
+    childLabels: grid
+        ? [...grid].map(child => child.icon?.label?.visible ?? null)
+        : [],
     childIcons: grid
         ? [...grid].map(child => child.icon?.iconSize ?? null)
         : [],
@@ -372,32 +380,95 @@ def restore_test_folder(backup):
 
 
 def check_folder_icon_sizes():
+    gs_set('folder-rows', 3)
+    gs_set('folder-columns', 4)
+    gs_set('folder-row-spacing', 8)
+    gs_set('folder-column-spacing', 14)
     for size in (32, 96):
         gs_set('custom-icon-size', size)
         wait_for_config(size, 2, 3)
         open_test_folder()
-        state = wait_for(
-            lambda: (state := folder_state()) and
-                state.get('open') and
-                state.get('effectiveIconSize') == size and
-                len(state.get('childIcons') or []) == len(FOLDER_APPS) and
-                all(icon == size for icon in state['childIcons']) and
-                state,
-            f'folder grid at {size}px')
+        try:
+            state = wait_for(
+                lambda: (state := folder_state()) and
+                    state.get('open') and
+                    state.get('effectiveIconSize') == size and
+                    state.get('rows') == 3 and
+                    state.get('columns') == 4 and
+                    state.get('rowSpacing') == 8 and
+                    state.get('columnSpacing') == 14 and
+                    len(state.get('childIcons') or []) == len(FOLDER_APPS) and
+                    all(icon == size for icon in state['childIcons']) and
+                    state,
+                f'folder grid at {size}px')
+        except RuntimeError as error:
+            print(f'folder state at {size}px: {json.dumps(folder_state())}')
+            raise error
         check(f'folder child icons follow {size}px setting',
             state['effectiveIconSize'] == size and
             all(icon == size for icon in state['childIcons']), state)
         time.sleep(0.5)
 
-    set_extension_enabled(False)
-    restored = wait_for(
+    check('folder layout follows settings',
+        state.get('rows') == 3 and state.get('columns') == 4 and
+        state.get('rowSpacing') == 8 and state.get('columnSpacing') == 14,
+        state)
+
+    gs_set('show-app-names', False)
+    hidden = wait_for(
         lambda: (state := folder_state()) and
-            state.get('fixedIconSize') == -1 and
-            (state.get('effectiveIconSize') or 0) > 0 and
+            state.get('open') and
+            state.get('childLabels') and
+            all(value is False for value in state['childLabels']) and
+            state.get('mainLabels') and
+            all(value is False for value in state['mainLabels']
+                if value is not None) and
             state,
-        'folder adaptive size restoration')
-    check('folder restores adaptive size on disable',
-        restored['fixedIconSize'] == -1, restored)
+        'app names hidden')
+    check('app names hide in grid and folders',
+        all(value is False for value in hidden['childLabels']) and
+        all(value is False for value in hidden['mainLabels']
+            if value is not None), hidden)
+
+    gs_set('show-app-names', True)
+    shown = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('childLabels') and
+            all(value is True for value in state['childLabels']) and
+            state.get('mainLabels') and
+            all(value is True for value in state['mainLabels']
+                if value is not None) and
+            state,
+        'app names shown')
+    check('app names show again',
+        all(value is True for value in shown['childLabels']) and
+        all(value is True for value in shown['mainLabels']
+            if value is not None), shown)
+
+    set_extension_enabled(False)
+    try:
+        restored = wait_for(
+            lambda: (state := folder_state()) and
+                state.get('fixedIconSize') == -1 and
+                (state.get('effectiveIconSize') or 0) > 0 and
+                state.get('rows') == 3 and
+                state.get('columns') == 3 and
+                (state.get('rowSpacing') or 0) > 0 and
+                state.get('rowSpacing') == state.get('columnSpacing') and
+                state.get('rowSpacing') not in (8, 14) and
+                state,
+            'folder adaptive layout restoration')
+    except RuntimeError as error:
+        print(f'folder state after disable: {json.dumps(folder_state())}')
+        raise error
+    check('folder restores adaptive layout on disable',
+        restored['fixedIconSize'] == -1 and
+        restored['rows'] == 3 and restored['columns'] == 3 and
+        restored['rowSpacing'] > 0 and
+        restored['rowSpacing'] == restored['columnSpacing'] and
+        restored['rowSpacing'] not in (8, 14),
+        restored)
     set_extension_enabled(True)
     wait_for_config(96, 2, 3)
     close_test_folder()

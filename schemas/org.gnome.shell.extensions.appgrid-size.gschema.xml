@@ -52,6 +52,44 @@
       <summary>Custom column spacing between icon columns</summary>
     </key>
 
+    <key type="i" name="folder-rows">
+      <default>3</default>
+      <range min="2" max="6"/>
+      <summary>Folder dialog rows</summary>
+      <description>Rows shown in an opened folder before paging</description>
+    </key>
+
+    <key type="i" name="folder-columns">
+      <default>3</default>
+      <range min="2" max="6"/>
+      <summary>Folder dialog columns</summary>
+      <description>Columns shown in an opened folder before paging</description>
+    </key>
+
+    <key type="i" name="folder-row-spacing">
+      <default>12</default>
+      <range min="0" max="64"/>
+      <summary>Folder dialog row spacing</summary>
+    </key>
+
+    <key type="i" name="folder-column-spacing">
+      <default>12</default>
+      <range min="0" max="64"/>
+      <summary>Folder dialog column spacing</summary>
+    </key>
+
+    <key type="b" name="show-app-names">
+      <default>true</default>
+      <summary>Show application names</summary>
+      <description>Show labels under application and folder icons in the app grid and folder dialogs.</description>
+    </key>
+
+    <key type="s" name="layout-snapshots">
+      <default>''</default>
+      <summary>Saved layout snapshots</summary>
+      <description>Internal JSON storage for user-saved layout snapshots.</description>
+    </key>
+
     <key type="s" name="runtime-preview-layout">
       <default>''</default>
       <summary>Last measured overview layout</summary>

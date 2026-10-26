@@ -1,22 +1,37 @@
 import Adw from 'gi://Adw';
 import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
     DEFAULT_PAGE_CAPACITY,
+    FOLDER_MAX_DIMENSION,
+    FOLDER_MAX_SPACING,
+    FOLDER_MIN_DIMENSION,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    SNAPSHOT_SETTINGS_KEYS,
     computePreviewColorIndex,
     computeGridFit,
     computeGridPixelSize,
     computePreviewTileSize,
     decodePreviewLayout,
+    readFolderConfig,
     resolvePreviewPages,
 } from './config.js';
+import {
+    MAX_SNAPSHOTS,
+    SNAPSHOT_VERSION,
+    addSnapshot,
+    parseSnapshots,
+    removeSnapshot,
+    serializeSnapshots,
+    snapshotLabel,
+} from './snapshots.js';
 
 const SHELL_PANEL_H = 30;
 const SHELL_SEARCH_H = 52;
@@ -231,7 +246,7 @@ function drawAppGlyph(cr, x, y, width, height, index, folder,
     cr.fill();
 }
 
-function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
+function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize, showNames) {
     for (const [index, item] of items.entries()) {
         const tile = item.tile;
         const fallbackIconW = Math.min(iconSize, tile.width) * sc;
@@ -253,6 +268,8 @@ function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
         drawAppGlyph(cr, ix, iy, iw, ih, index, item.folder,
             0.9, item.id ?? `grid-${index}`);
 
+        if (!showNames)
+            continue;
         const labelW = Math.min(tile.width * 0.72, Math.max(20, iconSize * 0.9)) * sc;
         const labelH = Math.max(1, 3 * sc);
         const labelX = fx + (tile.x + (tile.width - labelW / sc) / 2) * sc;
@@ -266,7 +283,7 @@ function drawMeasuredGridSection(cr, fx, fy, sc, items, iconSize) {
 function drawGridSection(cr, iaX, iaY, iaW, iaH,
     drawRows, drawCols, fitRows, fitCols,
     cellW, cellH, iconW, iconH, gapW, gapH,
-    sc, usePresets, itemCount, items) {
+    sc, usePresets, itemCount, items, showNames) {
     const gridW = drawCols * cellW + Math.max(0, drawCols - 1) * gapW;
     const gx = iaX + (iaW - gridW) / 2;
     const gy = iaY;
@@ -291,13 +308,15 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
                 drawAppGlyph(cr, glyphX, glyphY, glyphW, glyphH,
                     index, folder, overflow ? 0.48 : 0.86,
                     items?.[index]?.id ?? `grid-${index}`);
-                cr.setSourceRGBA(0.9, 0.92, 0.96, overflow ? 0.3 : 0.52);
-                const labelW = iconW * 0.78;
-                const labelH = Math.max(1, 3 * sc);
-                roundedRect(cr, iconX + (iconW - labelW) / 2,
-                    folder ? glyphY + glyphH - 17 * sc : iconY + iconH + 7 * sc,
-                    labelW, labelH, labelH / 2);
-                cr.fill();
+                if (showNames) {
+                    cr.setSourceRGBA(0.9, 0.92, 0.96, overflow ? 0.3 : 0.52);
+                    const labelW = iconW * 0.78;
+                    const labelH = Math.max(1, 3 * sc);
+                    roundedRect(cr, iconX + (iconW - labelW) / 2,
+                        folder ? glyphY + glyphH - 17 * sc : iconY + iconH + 7 * sc,
+                        labelW, labelH, labelH / 2);
+                    cr.fill();
+                }
             } else {
                 cr.setSourceRGBA(0.7, 0.75, 0.84, 0.08);
                 cr.arc(iconX + iconW / 2, iconY + iconH / 2,
@@ -318,6 +337,95 @@ function drawGridSection(cr, iaX, iaY, iaW, iaH,
             iaY,
             afW + 4, afH + 4);
         cr.stroke();
+    }
+    cr.restore();
+}
+
+function drawFolderPreviewSection(cr, x, y, w, h, config) {
+    const {
+        iconSize, folderRows, folderColumns,
+        folderRowSpacing, folderColumnSpacing, showNames,
+    } = config;
+    const rows = Math.max(1, folderRows);
+    const columns = Math.max(1, folderColumns);
+    const panelPad = 18;
+    const titleH = 30;
+    const dotsH = 18;
+    const tile = iconSize + (showNames ? 34 : 12);
+    const contentW = columns * tile +
+        Math.max(0, columns - 1) * folderColumnSpacing + panelPad * 2;
+    const contentH = rows * tile +
+        Math.max(0, rows - 1) * folderRowSpacing +
+        panelPad * 2 + titleH + dotsH;
+    const scale = Math.min((w - 12) / contentW, (h - 12) / contentH);
+    const panelW = contentW * scale;
+    const panelH = contentH * scale;
+    const px = x + (w - panelW) / 2;
+    const py = y + (h - panelH) / 2;
+
+    cr.setSourceRGBA(0.02, 0.03, 0.06, 0.55);
+    roundedRect(cr, x, y, w, h, Math.max(2, 8 * scale));
+    cr.fill();
+
+    cr.save();
+    roundedRect(cr, px, py, panelW, panelH, Math.max(3, 14 * scale));
+    cr.clip();
+    cr.setSourceRGBA(0.13, 0.14, 0.18, 0.97);
+    cr.paint();
+    cr.setSourceRGBA(0.75, 0.8, 0.9, 0.13);
+    cr.rectangle(px, py, panelW, titleH * scale);
+    cr.fill();
+
+    cr.setSourceRGBA(0.9, 0.92, 0.96, 0.5);
+    const titleW = Math.min(panelW * 0.3, 120 * scale);
+    roundedRect(cr, px + (panelW - titleW) / 2,
+        py + titleH * scale * 0.36, titleW,
+        Math.max(1, 4 * scale), 2 * scale);
+    cr.fill();
+
+    const gridX = px + panelPad * scale;
+    const gridY = py + (panelPad + titleH) * scale;
+    const capacity = rows * columns;
+    const sampleCount = Math.min(capacity, 12);
+    for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+            const index = row * columns + column;
+            const cellX = gridX +
+                column * (tile + folderColumnSpacing) * scale;
+            const cellY = gridY +
+                row * (tile + folderRowSpacing) * scale;
+            const glyphSize = iconSize * scale;
+            const glyphX = cellX + (tile * scale - glyphSize) / 2;
+            const glyphY = cellY + Math.max(0,
+                (tile * scale - glyphSize) / 2 -
+                (showNames ? 5 * scale : 0));
+            if (index < sampleCount) {
+                drawAppGlyph(cr, glyphX, glyphY, glyphSize, glyphSize,
+                    index, false, 0.9, `folder-preview-${index}`);
+                if (showNames) {
+                    cr.setSourceRGBA(0.9, 0.92, 0.96, 0.58);
+                    roundedRect(cr,
+                        glyphX + glyphSize * 0.1,
+                        glyphY + glyphSize + 6 * scale,
+                        glyphSize * 0.8, Math.max(1, 3 * scale),
+                        1.5 * scale);
+                    cr.fill();
+                }
+            } else {
+                cr.setSourceRGBA(0.7, 0.75, 0.84, 0.08);
+                cr.arc(glyphX + glyphSize / 2, glyphY + glyphSize / 2,
+                    Math.max(1, 2 * scale), 0, Math.PI * 2);
+                cr.fill();
+            }
+        }
+    }
+
+    const dotsY = py + panelH - dotsH * scale * 0.55;
+    for (let index = 0; index < 2; index++) {
+        cr.setSourceRGBA(0.9, 0.92, 0.96, index === 0 ? 0.75 : 0.25);
+        cr.arc(px + panelW / 2 + (index - 0.5) * 12 * scale, dotsY,
+            Math.max(1, 2.5 * scale), 0, Math.PI * 2);
+        cr.fill();
     }
     cr.restore();
 }
@@ -400,6 +508,14 @@ function createSpinRow(settings, key, title, {lower, upper, step, page}) {
 }
 
 function readGridConfig(settings) {
+    const folder = readFolderConfig(settings);
+    const folderConfig = {
+        folderRows: folder.rows,
+        folderColumns: folder.columns,
+        folderRowSpacing: folder.rowSpacing,
+        folderColumnSpacing: folder.columnSpacing,
+        showNames: folder.showNames,
+    };
     if (settings.get_boolean('use-presets')) {
         const preset = PRESETS[settings.get_int('preset-level')];
         return {
@@ -409,6 +525,7 @@ function readGridConfig(settings) {
             rowGap: preset.gap,
             colGap: preset.gap,
             usePresets: true,
+            ...folderConfig,
         };
     }
     return {
@@ -418,7 +535,88 @@ function readGridConfig(settings) {
         rowGap: settings.get_int('custom-row-spacing'),
         colGap: settings.get_int('custom-column-spacing'),
         usePresets: false,
+        ...folderConfig,
     };
+}
+
+function storedValue(settings, key) {
+    const value = settings.get_value(key);
+    return {
+        type: value.get_type_string(),
+        value: value.print(true),
+    };
+}
+
+function applyStoredValue(settings, key, stored) {
+    const type = new GLib.VariantType(stored.type);
+    const value = GLib.Variant.parse(type, stored.value, null, null);
+    settings.set_value(key, value);
+}
+
+function captureFolderSettings(folderSettings) {
+    const children = folderSettings.get_strv('folder-children');
+    const items = {};
+    for (const id of children) {
+        const settings = new Gio.Settings({
+            schema_id: 'org.gnome.desktop.app-folders.folder',
+            path: `${folderSettings.path}folders/${id}/`,
+        });
+        const keys = {};
+        for (const key of settings.list_keys())
+            keys[key] = storedValue(settings, key);
+        items[id] = keys;
+    }
+    return {children, items};
+}
+
+function captureSnapshot(settings, shellSettings, folderSettings, name) {
+    const config = readGridConfig(settings);
+    const picker = shellSettings.get_value('app-picker-layout');
+    const pages = picker.deepUnpack();
+    return {
+        version: SNAPSHOT_VERSION,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        created: new Date().toISOString(),
+        settings: Object.fromEntries(SNAPSHOT_SETTINGS_KEYS.map(key =>
+            [key, storedValue(settings, key)])),
+        appPicker: {
+            type: picker.get_type_string(),
+            value: picker.print(true),
+        },
+        folders: captureFolderSettings(folderSettings),
+        summary: {
+            iconSize: config.iconSize,
+            rows: config.rows,
+            columns: config.columns,
+            folderRows: config.folderRows,
+            folderColumns: config.folderColumns,
+            showNames: config.showNames,
+            pages: Array.isArray(pages) ? pages.length : 0,
+        },
+    };
+}
+
+function restoreSnapshot(settings, shellSettings, folderSettings, snapshot) {
+    for (const [id, keys] of Object.entries(snapshot.folders.items)) {
+        const folder = new Gio.Settings({
+            schema_id: 'org.gnome.desktop.app-folders.folder',
+            path: `${folderSettings.path}folders/${id}/`,
+        });
+        for (const [key, stored] of Object.entries(keys))
+            applyStoredValue(folder, key, stored);
+    }
+    folderSettings.set_strv('folder-children',
+        snapshot.folders.children);
+    shellSettings.set_value('app-picker-layout',
+        GLib.Variant.parse(
+            new GLib.VariantType(snapshot.appPicker.type),
+            snapshot.appPicker.value, null, null));
+    for (const key of SNAPSHOT_SETTINGS_KEYS) {
+        const stored = snapshot.settings[key];
+        if (stored)
+            applyStoredValue(settings, key, stored);
+    }
 }
 
 function readFallbackPages(shellSettings, folderSettings, consolidate) {
@@ -506,7 +704,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         });
 
         const {widget: controlsBox, cleanupFns: ctrlFns} =
-            this._buildControlsPane(settings);
+            this._buildControlsPane(settings, window);
         cleanupFns.push(...ctrlFns);
 
         const {widget: rightBox, cleanupFns: prevFns} =
@@ -519,7 +717,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         rootGroup.add(rootRow);
     }
 
-    _buildControlsPane(settings) {
+    _buildControlsPane(settings, window) {
         const cleanupFns = [];
 
         const leftBox = new Gtk.Box({
@@ -621,9 +819,118 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         customGroup.add(infoRow);
         leftBox.append(customGroup);
 
+        const folderGroup = new Adw.PreferencesGroup({
+            title: 'Folder dialog',
+            description: 'Layout of an opened folder; child icons follow the app icon size',
+        });
+        folderGroup.add(createSpinRow(settings, 'folder-rows',
+            'Rows', {
+                lower: FOLDER_MIN_DIMENSION, upper: FOLDER_MAX_DIMENSION,
+                step: 1, page: 1,
+            }));
+        folderGroup.add(createSpinRow(settings, 'folder-columns',
+            'Columns', {
+                lower: FOLDER_MIN_DIMENSION, upper: FOLDER_MAX_DIMENSION,
+                step: 1, page: 1,
+            }));
+        folderGroup.add(createSpinRow(settings, 'folder-row-spacing',
+            'Row spacing (px)', {
+                lower: 0, upper: FOLDER_MAX_SPACING, step: 2, page: 8,
+            }));
+        folderGroup.add(createSpinRow(settings, 'folder-column-spacing',
+            'Column spacing (px)', {
+                lower: 0, upper: FOLDER_MAX_SPACING, step: 2, page: 8,
+            }));
+
+        const folderInfo = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.START,
+            margin_top: 4,
+            wrap: true,
+            xalign: 0,
+            css_classes: ['dim-label'],
+        });
+        const folderInfoRow = new Adw.PreferencesRow({
+            activatable: false,
+            selectable: false,
+        });
+        folderInfoRow.set_child(folderInfo);
+        folderGroup.add(folderInfoRow);
+        leftBox.append(folderGroup);
+
+        const folderPreviewGroup = new Adw.PreferencesGroup({
+            title: 'Folder preview',
+        });
+        const folderDa = new Gtk.DrawingArea({
+            content_width: 360,
+            content_height: 180,
+            hexpand: true,
+        });
+        folderDa.set_draw_func((_area, cr, drawW, drawH) => {
+            const config = readGridConfig(settings);
+            drawFolderPreviewSection(cr, 0, 0, drawW, drawH, {
+                iconSize: config.iconSize,
+                folderRows: config.folderRows,
+                folderColumns: config.folderColumns,
+                folderRowSpacing: config.folderRowSpacing,
+                folderColumnSpacing: config.folderColumnSpacing,
+                showNames: config.showNames,
+            });
+        });
+        const folderPreviewFrame = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            overflow: Gtk.Overflow.HIDDEN,
+        });
+        folderPreviewFrame.add_css_class('card');
+        folderPreviewFrame.append(folderDa);
+        const folderPreviewAspect = new Gtk.AspectFrame({
+            ratio: 2,
+            obey_child: false,
+            hexpand: true,
+        });
+        folderPreviewAspect.set_child(folderPreviewFrame);
+        const folderPreviewRow = new Adw.PreferencesRow({
+            activatable: false,
+            selectable: false,
+        });
+        folderPreviewRow.set_child(folderPreviewAspect);
+        folderPreviewGroup.add(folderPreviewRow);
+        leftBox.append(folderPreviewGroup);
+
+        const updateFolderInfo = () => {
+            const folder = readFolderConfig(settings);
+            const capacity = folder.rows * folder.columns;
+            folderInfo.label =
+                `${folder.rows} × ${folder.columns} = ${capacity} apps per page · ` +
+                `gap ${folder.rowSpacing}×${folder.columnSpacing} px · ` +
+                `${folder.showNames ? 'labels shown' : 'labels hidden'}`;
+            folderDa.queue_draw();
+        };
+        for (const key of [
+            'folder-rows',
+            'folder-columns',
+            'folder-row-spacing',
+            'folder-column-spacing',
+            'show-app-names',
+            'use-presets',
+            'preset-level',
+            'custom-icon-size',
+        ]) {
+            connectSignal(cleanupFns, settings, `changed::${key}`,
+                updateFolderInfo);
+        }
+        updateFolderInfo();
+
         const behaviorGroup = new Adw.PreferencesGroup({
             title: 'Page layout',
         });
+        const namesRow = new Adw.SwitchRow({
+            title: 'Show application names',
+            subtitle: 'Show labels under app and folder icons',
+        });
+        settings.bind('show-app-names', namesRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        behaviorGroup.add(namesRow);
         const consolidateRow = new Adw.SwitchRow({
             title: 'Consolidate app pages',
             subtitle: 'Fill earlier pages and permanently save the new app order',
@@ -632,6 +939,166 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         behaviorGroup.add(consolidateRow);
         leftBox.append(behaviorGroup);
+
+        const snapshotsGroup = new Adw.PreferencesGroup({
+            title: 'Layout snapshots',
+            description: 'Save layout settings, app order and folder contents',
+        });
+        const snapshotNameRow = new Adw.EntryRow({
+            title: 'Snapshot name',
+        });
+        snapshotsGroup.add(snapshotNameRow);
+
+        const saveSnapshotRow = new Adw.ActionRow({
+            title: 'Save current layout',
+            subtitle: 'Captures the current grid, labels and app arrangement',
+        });
+        const saveSnapshotButton = new Gtk.Button({
+            label: 'Save',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['suggested-action'],
+        });
+        saveSnapshotRow.add_suffix(saveSnapshotButton);
+        saveSnapshotRow.activatable_widget = saveSnapshotButton;
+        snapshotsGroup.add(saveSnapshotRow);
+
+        const snapshotsCombo = new Adw.ComboRow({
+            title: 'Saved layouts',
+        });
+        snapshotsGroup.add(snapshotsCombo);
+
+        const snapshotActionRow = new Adw.ActionRow({
+            title: 'Selected layout',
+            subtitle: 'Restoring replaces the grid, app order and folders',
+        });
+        const restoreSnapshotButton = new Gtk.Button({
+            label: 'Restore',
+            valign: Gtk.Align.CENTER,
+        });
+        const deleteSnapshotButton = new Gtk.Button({
+            label: 'Delete',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['destructive-action'],
+        });
+        snapshotActionRow.add_suffix(restoreSnapshotButton);
+        snapshotActionRow.add_suffix(deleteSnapshotButton);
+        snapshotsGroup.add(snapshotActionRow);
+
+        const snapshotStatus = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.START,
+            margin_top: 4,
+            wrap: true,
+            xalign: 0,
+            css_classes: ['dim-label'],
+        });
+        const snapshotStatusRow = new Adw.PreferencesRow({
+            activatable: false,
+            selectable: false,
+        });
+        snapshotStatusRow.set_child(snapshotStatus);
+        snapshotsGroup.add(snapshotStatusRow);
+        leftBox.append(snapshotsGroup);
+
+        const shellSettings = Gio.Settings.new('org.gnome.shell');
+        const folderSettings = Gio.Settings.new(
+            'org.gnome.desktop.app-folders');
+
+        const refreshSnapshotRows = selectId => {
+            snapshots = parseSnapshots(
+                settings.get_string('layout-snapshots'));
+            const model = new Gtk.StringList();
+            for (const snapshot of snapshots) {
+                model.append(
+                    `${snapshot.name} — ${snapshotLabel(snapshot)}`);
+            }
+            snapshotsCombo.model = model;
+            const index = selectId
+                ? snapshots.findIndex(snapshot => snapshot.id === selectId)
+                : 0;
+            snapshotsCombo.selected = snapshots.length
+                ? Math.max(0, index)
+                : Gtk.INVALID_LIST_POSITION;
+            const hasSnapshots = snapshots.length > 0;
+            snapshotsCombo.sensitive = hasSnapshots;
+            restoreSnapshotButton.sensitive = hasSnapshots;
+            deleteSnapshotButton.sensitive = hasSnapshots;
+            snapshotStatus.label = hasSnapshots
+                ? `${snapshots.length} saved layout(s)`
+                : 'No saved layouts yet';
+            snapshotNameRow.text = `Layout ${snapshots.length + 1}`;
+        };
+
+        let snapshots = [];
+        refreshSnapshotRows();
+        connectSignal(cleanupFns, settings, 'changed::layout-snapshots', () => {
+            refreshSnapshotRows();
+        });
+
+        saveSnapshotButton.connect('clicked', () => {
+            if (snapshots.length >= MAX_SNAPSHOTS) {
+                snapshotStatus.label =
+                    `Limit reached (${MAX_SNAPSHOTS}); delete a snapshot first`;
+                return;
+            }
+            const name = snapshotNameRow.text.trim() ||
+                `Layout ${snapshots.length + 1}`;
+            try {
+                const snapshot = captureSnapshot(
+                    settings, shellSettings, folderSettings, name);
+                snapshots = addSnapshot(snapshots, snapshot);
+                settings.set_string('layout-snapshots',
+                    serializeSnapshots(snapshots));
+                refreshSnapshotRows(snapshot.id);
+                snapshotStatus.label = `Saved “${name}”`;
+            } catch (error) {
+                snapshotStatus.label = `Could not save: ${error.message}`;
+            }
+        });
+
+        deleteSnapshotButton.connect('clicked', () => {
+            const snapshot = snapshots[snapshotsCombo.selected];
+            if (!snapshot)
+                return;
+            snapshots = removeSnapshot(snapshots, snapshot.id);
+            settings.set_string('layout-snapshots',
+                serializeSnapshots(snapshots));
+            refreshSnapshotRows();
+            snapshotStatus.label = `Deleted “${snapshot.name}”`;
+        });
+
+        restoreSnapshotButton.connect('clicked', () => {
+            const snapshot = snapshots[snapshotsCombo.selected];
+            if (!snapshot)
+                return;
+            const dialog = new Gtk.AlertDialog({
+                message: `Restore “${snapshot.name}”?`,
+                detail: 'This replaces the current layout settings, ' +
+                    'app order and folder contents.',
+                buttons: ['Cancel', 'Restore'],
+                cancel_button: 0,
+                default_button: 0,
+            });
+            dialog.choose(window, null, (source, result) => {
+                let response;
+                try {
+                    response = source.choose_finish(result);
+                } catch (_error) {
+                    return;
+                }
+                if (response !== 1)
+                    return;
+                try {
+                    restoreSnapshot(
+                        settings, shellSettings, folderSettings, snapshot);
+                    snapshotStatus.label =
+                        `Restored “${snapshot.name}”`;
+                } catch (error) {
+                    snapshotStatus.label =
+                        `Could not restore: ${error.message}`;
+                }
+            });
+        });
 
         const updateVisibility = () => {
             const preset = settings.get_boolean('use-presets');
@@ -883,6 +1350,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 previewCellSize,
                 itemCount,
                 gridItems,
+                showNames: config.showNames,
                 measuredItems: measuredItemsMatch ? runtimeLayout.items : null,
                 searchRect: runtimeLayout?.settled
                     ? runtimeLayout.searchRect ?? null : null,
@@ -969,7 +1437,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 gridItems,
                 measuredItems, searchRect, workspaceRects, workspaceCount,
                 dashRect, dashItems, pageCount, currentPage,
-                gridBottom, pageIndicatorRect, dashVisible,
+                gridBottom, pageIndicatorRect, dashVisible, showNames,
             } = ps;
 
             const pad = PREVIEW_PADDING;
@@ -1004,7 +1472,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             const drawCols = usePresets ? fitCols : columns;
             if (measuredItems?.length) {
                 drawMeasuredGridSection(cr, fx, fy, sc,
-                    measuredItems, iconSize);
+                    measuredItems, iconSize, showNames);
             } else {
                 drawGridSection(cr,
                     fx + iconAreaX * sc,
@@ -1015,7 +1483,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     previewCellSize * sc, previewCellSize * sc,
                     iconSize * sc, iconSize * sc,
                     colGap * sc, rowGap * sc,
-                    sc, usePresets, itemCount, gridItems);
+                    sc, usePresets, itemCount, gridItems, showNames);
             }
 
             drawDashSection(cr, fx, fy, fW,
@@ -1026,6 +1494,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             cr.setDash([], 0);
         });
 
-        return {widget: rightBox, cleanupFns};
+        const previewScroller = new Gtk.ScrolledWindow({
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            min_content_height: 420,
+            vexpand: true,
+        });
+        previewScroller.set_child(rightBox);
+
+        return {widget: previewScroller, cleanupFns};
     }
 }

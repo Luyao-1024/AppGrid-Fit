@@ -1,8 +1,8 @@
 {
   "uuid": "appgrid-size@luyao",
   "name": "AppGrid Fit",
-  "description": "Customize App Grid icon size, rows/columns and spacing to fit more apps per page",
-  "shell-version": ["46", "47", "48", "49", "50"],
+  "description": "Customize App Grid and folder dialog layout, hide app names, and save restorable layout snapshots",
+  "shell-version": ["46", "47", "48", "49", "50", "51"],
   "version": 12,
   "version-name": "1.3.4",
   "url": "https://github.com/Luyao-1024/AppGrid-Fit",

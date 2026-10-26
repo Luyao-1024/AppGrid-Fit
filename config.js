@@ -10,7 +10,16 @@ export const SETTINGS_KEYS = [
     'use-presets', 'preset-level', 'consolidate-pages',
     'custom-icon-size', 'custom-rows', 'custom-columns',
     'custom-row-spacing', 'custom-column-spacing',
+    'folder-rows', 'folder-columns',
+    'folder-row-spacing', 'folder-column-spacing',
+    'show-app-names',
 ]
+
+export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
+
+export const FOLDER_MIN_DIMENSION = 2
+export const FOLDER_MAX_DIMENSION = 6
+export const FOLDER_MAX_SPACING = 64
 
 export const PRESETS = [
     {iconSize: 96, rows: 4, columns: 6, gap: 24},
@@ -46,6 +55,16 @@ export function computeGridPixelSize(rows, columns, cellSize, rowGap, columnGap)
     return {
         width: columns * cellSize + Math.max(0, columns - 1) * columnGap,
         height: rows * cellSize + Math.max(0, rows - 1) * rowGap,
+    }
+}
+
+export function readFolderConfig(settings) {
+    return {
+        rows: settings.get_int('folder-rows'),
+        columns: settings.get_int('folder-columns'),
+        rowSpacing: settings.get_int('folder-row-spacing'),
+        columnSpacing: settings.get_int('folder-column-spacing'),
+        showNames: settings.get_boolean('show-app-names'),
     }
 }
 

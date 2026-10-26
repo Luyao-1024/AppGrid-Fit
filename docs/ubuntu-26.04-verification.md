@@ -6,22 +6,26 @@ Verified on 2026-10-26 for AppGrid Fit 1.3.4.
 
 `scripts/verify-qemu.sh` runs the same probe inside disposable QEMU guests, so the host
 desktop is never the test target. The first run downloads cloud images from the Tsinghua
-mirror and provisions one golden image per case; later runs boot a fresh qcow2 overlay
+mirror (the upstream Fedora directory for `fedora-51`) and provisions one golden image per
+case; later runs boot a fresh qcow2 overlay
 backed by the golden image and delete it afterwards, so extension settings and app order
 always start clean. The cache is `${XDG_CACHE_HOME:-~/.cache}/appgrid-qemu`.
 
-Guest package installation also uses the Tsinghua mirror. Ubuntu's cloud-init `apt` section
+Guest package installation is pinned to a Chinese mirror. Ubuntu's cloud-init `apt` section
 sets the primary and security URIs before `package_update`; Fedora's boot command replaces
 the `fedora`, `fedora-updates` and `fedora-updates-testing` metalinks with Tsinghua base URLs
 and disables the unmirrored Cisco OpenH264 repository. Provisioning then verifies all active
 apt sources and those three Fedora repositories, failing instead of proceeding from an
-upstream mirror.
+upstream mirror. The `fedora-51` case is the documented exception: Tsinghua does not mirror
+rawhide, so it uses Fedora's upstream rawhide image and the NJU Fedora mirror for package
+downloads (`MIRROR_MODE=nju`).
 
 | Case | Guest | Layout |
 | --- | --- | --- |
 | `ubuntu-24.04` | Ubuntu 24.04 cloud image, GNOME Shell 46 | upstream mode-based `IconGridLayout` |
 | `ubuntu-26.04` | Ubuntu 26.04 cloud image, GNOME Shell 50.1 | Ubuntu adaptive `IconGridLayout` |
 | `fedora-44` | Fedora 44 Cloud, GNOME Shell 50 | upstream mode-based `IconGridLayout` |
+| `fedora-51` | Fedora rawhide, GNOME Shell 51 | upstream mode-based `IconGridLayout` |
 
 The guest runs `gnome-shell --headless --wayland --no-x11 --unsafe-mode` under its own
 `dbus-run-session` and XDG tree. `--no-x11` is required: otherwise libgvc synchronously
@@ -45,19 +49,23 @@ pages. The cloud image uses the standard horizontal Dash; Ubuntu Dock is not ins
 Results on 2026-10-26 with QEMU 10.2.2/KVM, 2 vCPU, 4096 MiB, 1920×1080 virtual monitor and
 the extension built from this repository:
 
-- `ubuntu-24.04`: 66 checks passed.
-- `ubuntu-26.04`: 66 checks passed.
-- `fedora-44`: 66 checks passed.
+- `ubuntu-24.04`: 69 checks passed.
+- `ubuntu-26.04`: 69 checks passed.
+- `fedora-44`: 69 checks passed.
+- `fedora-51`: 69 checks passed.
 
 The QEMU guest sets `TEST_FOLDER=1`. The probe creates a temporary folder from four dummy
 apps, opens it at 32 px and 96 px, and asserts that the folder dialog's child icons follow
-the configured size. It also disables the extension while the folder is open and verifies
-the grid returns to Shell's adaptive sizing. Folder settings are backed up and restored;
-legacy harnesses leave `TEST_FOLDER` unset and never touch folder settings.
+the configured size. It then configures folder rows/columns and gaps, hides and shows app
+names in the main grid and folder dialog, and disables the extension while the folder is
+open to verify Shell's native sizing, dimensions and derived symmetric spacing come back.
+Folder settings are backed up and restored; legacy harnesses leave `TEST_FOLDER` unset and
+never touch folder settings.
 
-The headless runs have 66 checks: the standard horizontal Dash emits two geometry checks
-instead of the live VM's three, and the QEMU guest adds three folder-dialog checks. The
-legacy live VM runs 64 checks and the legacy Fedora headless harness runs 63.
+The headless runs have 69 checks: the standard horizontal Dash emits two geometry checks
+instead of the live VM's three, and the QEMU guest adds six folder/name checks. The legacy
+live VM runs 64 checks and the legacy Fedora headless harness runs 63 because they do not
+enable `TEST_FOLDER`.
 
 ## Environment (legacy live VM)
 
@@ -128,6 +136,9 @@ human inspection.
 | Theme unload | Default CSS limits are restored after disabling |
 | Consolidation | Enabling consolidation with 2×3 capacity fills pages to `[6, 6, 1]` without changing flattened order |
 | Saved order | Restoring `app-picker-layout` rebuilds `[6, 5, 2]` in the original order |
+| Folder layout | Folder dialog child icons follow 32 px and 96 px; rows 3 × columns 4; gaps 8/14 px |
+| App names | `show-app-names=false` hides labels in the main grid and folder dialog, and restores them when re-enabled |
+| Folder disable | Restores adaptive icon size, 3×3 dimensions and Shell's native symmetric spacing |
 
 Screenshots from the harness are stored in `/tmp/appgrid-vm/` by default
 (`app-grid.png`, `prefs.png`). The final overview shows Ubuntu's left dock, centered page
@@ -161,6 +172,13 @@ Shell inserts overflow at the start of the next page and a later redisplay scram
   system theme through GNOME Settings is still a manual check.
 - Mouse-drag ordering is not synthesized. Saved-order restoration is verified through Shell's
   `_savePages()` output and `app-picker-layout`, not by generating drag gestures.
+- The preferences window is not part of QEMU acceptance. Its construction and both previews
+  were smoke-tested locally under an isolated Xvfb session, and snapshot save/restore data
+  round-trips are covered by unit tests and an isolated GSettings check; Cairo pixels are not
+  asserted automatically.
+- The `fedora-51` case uses Fedora's upstream rawhide image and the NJU package mirror because
+  Tsinghua does not mirror rawhide. It verifies GNOME Shell 51.1 rather than a released
+  Fedora 45 image.
 
 ## Historical issue #2 reproduction (1.3.1)
 
@@ -180,10 +198,10 @@ properties, and restores the original mode array or fixed-property presence/valu
 
 ## Automated checks
 
-- `npm run check`: source syntax/policy validation and 40 unit tests.
+- `npm run check`: source syntax/policy validation and 44 unit tests.
 - Strict schema validation and compiled-schema reproducibility.
 - Package validation with `npm run check:package -- <archive>`.
-- `scripts/verify-qemu.sh`: cached QEMU acceptance across Ubuntu 24.04, Ubuntu 26.04 and
-  Fedora 44, with disposable per-run overlays.
+- `scripts/verify-qemu.sh`: cached QEMU acceptance across Ubuntu 24.04, Ubuntu 26.04,
+  Fedora 44 and Fedora rawhide (GNOME 51), with disposable per-run overlays.
 - Shexli was previously run clean on 0.2.1/tree-sitter 0.25.2; CI continues to run it on the
   packaged artifact.

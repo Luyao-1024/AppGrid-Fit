@@ -8,6 +8,7 @@ EXT_ZIP=${1:?usage: qemu-guest-probe.sh EXTENSION.zip PROBE.py}
 PROBE=${2:?usage: qemu-guest-probe.sh EXTENSION.zip PROBE.py}
 UUID=${EXTENSION_UUID:-appgrid-size@luyao}
 EXPECTED_LAYOUT_MODE=${EXPECTED_LAYOUT_MODE:-modes}
+EXPECTED_SHELL_MAJOR=${EXPECTED_SHELL_MAJOR:-}
 MONITOR=${MONITOR:-1920x1080}
 
 WORK=/tmp/appgrid-qemu-probe
@@ -27,6 +28,16 @@ for command in gnome-shell dbus-run-session glib-compile-schemas \
         exit 1
     }
 done
+
+if [ -n "$EXPECTED_SHELL_MAJOR" ]; then
+    actual_major=$(gnome-shell --version | grep -oE '[0-9]+' | head -1)
+    if [ "$actual_major" != "$EXPECTED_SHELL_MAJOR" ]; then
+        echo "Guest runs GNOME Shell $actual_major," \
+            "expected $EXPECTED_SHELL_MAJOR: $(gnome-shell --version)"
+        exit 1
+    fi
+    echo "GNOME Shell $(gnome-shell --version | awk '{print $NF}')"
+fi
 
 mkdir -p "$EXT_DIR"
 unzip -q "$EXT_ZIP" -d "$EXT_DIR"
@@ -158,6 +169,7 @@ export GSETTINGS_SCHEMA_DIR="$EXT_DIR/schemas"
 export DISPLAY=:999
 export NO_AT_BRIDGE=1
 export EXPECTED_LAYOUT_MODE
+export EXPECTED_SHELL_MAJOR
 export MONITOR
 export EXTENSION_UUID="$UUID"
 
