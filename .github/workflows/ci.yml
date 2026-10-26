@@ -97,6 +97,8 @@ jobs:
           if patched == source:
               raise SystemExit('Shexli GNOME 51 cutoff patch did not apply')
           path.write_text(patched)
+          for cache in path.parent.glob('__pycache__/metadata.*.pyc'):
+              cache.unlink()
           PY
           report="$RUNNER_TEMP/shexli-report.json"
           "$RUNNER_TEMP/shexli-venv/bin/shexli" \
