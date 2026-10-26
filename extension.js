@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter'
 import GLib from 'gi://GLib'
+import St from 'gi://St'
 import * as Main from 'resource:///org/gnome/shell/ui/main.js'
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js'
 
@@ -12,9 +13,14 @@ import {
     computeGridFit,
     computePreviewTileSize,
 } from './config.js'
-import {reflowPages, restorePersistedPageOrder} from './gridPages.js'
+import {
+    reflowPages,
+    restorePersistedPageOrder,
+    syncPageManagerPages,
+} from './gridPages.js'
 import {
     getGridLayoutMode,
+    readThemeSpacing,
     restoreGridLayout,
     saveGridLayout,
     setGridDimensions,
@@ -26,18 +32,31 @@ const ENFORCED_PROPERTIES = [
     'page-valign', 'page-halign',
 ]
 
+const SETTLE_PUBLISH_DELAY_MS = 600
+
 export default class AppGridSizeExtension extends Extension {
     enable() {
         this._resetState()
         this._settings = this.getSettings()
         this._connectSettings()
+        this._connectTheme()
         this._overviewShowId =
-            Main.overview.connect('showing', () => this._apply())
+            Main.overview.connect('showing', () => {
+                this._overviewShowing = true
+                this._cancelSettledPublish()
+                this._overviewShown = false
+                this._apply()
+            })
         this._overviewShownId = Main.overview.connect('shown', () => {
-            const grid = this._findGrid()
-            if (grid)
-                this._publishPreviewLayout(grid, true)
+            this._overviewShowing = false
+            this._scheduleSettledPublish()
         })
+        this._overviewHidingId =
+            Main.overview.connect('hiding', () => {
+                this._overviewShowing = false
+                this._cancelSettledPublish()
+                this._overviewShown = false
+            })
         this._monitorsChangedId = Main.layoutManager.connect(
             'monitors-changed', () => this._onMonitorsChanged())
         this._apply()
@@ -47,6 +66,7 @@ export default class AppGridSizeExtension extends Extension {
         this._cancelScheduledApply()
         this._disconnectOverview()
         this._disconnectMonitorsChanged()
+        this._disconnectTheme()
         this._disconnectSettings()
         this._disconnectGridBindings()
         this._restoreOriginalLayout()
@@ -62,6 +82,10 @@ export default class AppGridSizeExtension extends Extension {
         this._sigIds = []
         this._overviewShowId = 0
         this._overviewShownId = 0
+        this._overviewHidingId = 0
+        this._overviewShown = false
+        this._overviewShowing = false
+        this._settlePublishId = 0
         this._monitorsChangedId = 0
         this._allocationId = 0
         this._allocationGrid = null
@@ -69,22 +93,54 @@ export default class AppGridSizeExtension extends Extension {
         this._restoredOrderLayoutManager = null
         this._lastAllocation = null
         this._scheduledApplyId = 0
+        this._themeContext = null
+        this._themeChangedId = 0
+        this._themeChanged = false
+        this._warnedMessages = new Set()
     }
 
     _connectSettings() {
         for (const key of SETTINGS_KEYS) {
             this._sigIds.push(this._settings.connect(
-                `changed::${key}`, () => this._apply()))
+                `changed::${key}`, () => this._scheduleApply()))
         }
     }
 
+    _connectTheme() {
+        this._themeContext = St.ThemeContext.get_for_stage(global.stage)
+        this._themeChangedId = this._themeContext.connect('changed', () => {
+            this._themeChanged = true
+            this._scheduleApply()
+        })
+    }
+
+    _disconnectTheme() {
+        if (this._themeContext && this._themeChangedId)
+            this._themeContext.disconnect(this._themeChangedId)
+        this._themeContext = null
+        this._themeChangedId = 0
+    }
+
+    _warnOnce(message) {
+        if (this._warnedMessages.has(message))
+            return
+        this._warnedMessages.add(message)
+        console.warn(`[appgrid-size] ${message}`)
+    }
+
     _disconnectOverview() {
+        this._cancelSettledPublish()
         if (this._overviewShowId)
             Main.overview.disconnect(this._overviewShowId)
         if (this._overviewShownId)
             Main.overview.disconnect(this._overviewShownId)
+        if (this._overviewHidingId)
+            Main.overview.disconnect(this._overviewHidingId)
         this._overviewShowId = 0
         this._overviewShownId = 0
+        this._overviewHidingId = 0
+        this._overviewShown = false
+        this._overviewShowing = false
     }
 
     _disconnectMonitorsChanged() {
@@ -133,6 +189,31 @@ export default class AppGridSizeExtension extends Extension {
         })
     }
 
+    _cancelSettledPublish() {
+        if (!this._settlePublishId)
+            return
+        GLib.source_remove(this._settlePublishId)
+        this._settlePublishId = 0
+    }
+
+    _scheduleSettledPublish() {
+        this._cancelSettledPublish()
+        this._settlePublishId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, SETTLE_PUBLISH_DELAY_MS, () => {
+                this._settlePublishId = 0
+                if (!this._settings || !Main.overview.visible) {
+                    this._overviewShown = false
+                    return GLib.SOURCE_REMOVE
+                }
+                const grid = this._findGrid()
+                if (!grid?.layout_manager)
+                    return GLib.SOURCE_REMOVE
+                this._overviewShown = true
+                this._publishPreviewLayout(grid, true)
+                return GLib.SOURCE_REMOVE
+            })
+    }
+
     _onMonitorsChanged() {
         this._lastAllocation = null
         this._findGrid()?.queue_relayout()
@@ -171,7 +252,7 @@ export default class AppGridSizeExtension extends Extension {
             if (allocation.width <= 0 || allocation.height <= 0)
                 return
             if (Main.overview.visible)
-                this._publishPreviewLayout(grid, true)
+                this._publishPreviewLayout(grid, this._overviewShown)
             if (this._lastAllocation?.width === allocation.width &&
                 this._lastAllocation?.height === allocation.height)
                 return
@@ -248,10 +329,13 @@ export default class AppGridSizeExtension extends Extension {
         return tileSize > 0 ? Math.ceil(tileSize) : null
     }
 
-    _syncIconSize(lm) {
+    _syncIconSize(lm, fallbackSize = null) {
         let iconSize = lm.fixed_icon_size
         if (typeof lm._findBestIconSize === 'function')
             iconSize = lm._findBestIconSize()
+        else if ((!Number.isFinite(iconSize) || iconSize < 0) &&
+            Number.isFinite(fallbackSize) && fallbackSize > 0)
+            iconSize = fallbackSize
         if (!Number.isFinite(iconSize) || iconSize < 0)
             return
         if (lm._iconSize !== iconSize) {
@@ -269,6 +353,7 @@ export default class AppGridSizeExtension extends Extension {
         if (!this._settings)
             return
 
+        const isSettled = settled || this._overviewShown
         const lm = grid.layout_manager
         const tileSize = this._measurePreferredTileSize(lm)
         if (this._activeConfig && tileSize &&
@@ -295,6 +380,7 @@ export default class AppGridSizeExtension extends Extension {
         const itemCount = lm._pages?.[pageIndex]?.visibleChildren?.length ?? 0
         const padding = lm.page_padding
         const controls = this._getControlsManager()
+        const appDisplay = this._getAppDisplay()
         const pageItems = lm._pages?.[pageIndex]?.visibleChildren ?? []
         const items = pageItems.map(actor => ({
             id: this._getPreviewItemId(actor),
@@ -342,7 +428,7 @@ export default class AppGridSizeExtension extends Extension {
                 page.visibleChildren?.length ?? 0) ?? [itemCount],
             pageCount: lm._pages?.length ?? 1,
             currentPage: pageIndex,
-            settled,
+            settled: isSettled,
             config: this._activeConfig ? {
                 iconSize: this._activeConfig.iconSize,
                 rows: this._activeConfig.rows,
@@ -363,12 +449,33 @@ export default class AppGridSizeExtension extends Extension {
             ], monitor),
             workspaceRects: this._measureWorkspaceActors(controls, monitor),
             workspaceCount: global.workspace_manager?.n_workspaces ?? 2,
+            pageIndicatorRect: this._measureActor(
+                appDisplay?._pageIndicators, monitor),
             dashRect: this._firstMeasuredActor([
                 dash?._background,
                 dashBox,
                 dash,
             ], monitor),
+            dashVisible: dash?.visible ?? false,
             dashItems,
+            diagnostics: {
+                mode: getGridLayoutMode(grid),
+                hasSetGridModes: typeof grid.setGridModes === 'function',
+                hasGridModes: Array.isArray(grid._gridModes),
+                hasAdaptToSize: typeof lm.adaptToSize === 'function',
+                hasFixedRows: Object.hasOwn(lm, '_fixedRows'),
+                hasFixedColumns: Object.hasOwn(lm, '_fixedCols'),
+                rows: lm.rows_per_page ?? null,
+                columns: lm.columns_per_page ?? null,
+                fixedIconSize: lm.fixed_icon_size ?? null,
+                iconSize: lm._iconSize ?? null,
+                rowSpacing: lm.row_spacing ?? null,
+                columnSpacing: lm.column_spacing ?? null,
+                maxRowSpacing: lm.max_row_spacing ?? null,
+                maxColumnSpacing: lm.max_column_spacing ?? null,
+                pageValign: lm.page_valign ?? null,
+                pageHalign: lm.page_halign ?? null,
+            },
         })
         if (this._settings.get_string(PREVIEW_LAYOUT_KEY) !== layout)
             this._settings.set_string(PREVIEW_LAYOUT_KEY, layout)
@@ -381,6 +488,7 @@ export default class AppGridSizeExtension extends Extension {
         this._original = {
             layoutManager: lm,
             iconSize: lm.fixed_icon_size,
+            effectiveIconSize: lm._iconSize,
             rows: lm.rows_per_page,
             columns: lm.columns_per_page,
             rowSpacing: lm.row_spacing,
@@ -391,6 +499,26 @@ export default class AppGridSizeExtension extends Extension {
             pageHalign: lm.page_halign,
             layout: saveGridLayout(grid),
         }
+    }
+
+    _captureThemeDefaults(grid) {
+        const original = this._original
+        if (!original || original.layoutManager !== grid.layout_manager)
+            return
+
+        grid.ensure_style()
+        const spacing = readThemeSpacing(grid.get_theme_node())
+        if (!spacing)
+            return
+
+        // Ubuntu's adaptive layout derives row/column spacing from the
+        // effective icon size instead of CSS; only its limits are themed.
+        if (getGridLayoutMode(grid) !== 'adaptive') {
+            original.rowSpacing = spacing.rowSpacing
+            original.columnSpacing = spacing.columnSpacing
+        }
+        original.maxRowSpacing = spacing.maxRowSpacing
+        original.maxColumnSpacing = spacing.maxColumnSpacing
     }
 
     _readGridConfig() {
@@ -487,18 +615,27 @@ export default class AppGridSizeExtension extends Extension {
 
         const grid = this._findGrid()
         if (!grid?.layout_manager) {
-            console.warn('[appgrid-size] AppGrid not found')
+            this._warnOnce('AppGrid not found')
             return
         }
         if (!getGridLayoutMode(grid)) {
-            console.warn('[appgrid-size] AppGrid layout API is unsupported')
+            this._warnOnce('AppGrid layout API is unsupported')
             return
         }
+        this._warnedMessages.clear()
 
         const lm = grid.layout_manager
+        if (Main.overview.visible) {
+            this._cancelSettledPublish()
+            this._overviewShown = false
+        }
         try {
             this._setupAllocationWatcher(grid)
             this._saveOriginalValues(lm, grid)
+            if (this._themeChanged) {
+                this._captureThemeDefaults(grid)
+                this._themeChanged = false
+            }
             this._applied = true
 
             let config = this._readGridConfig()
@@ -525,11 +662,15 @@ export default class AppGridSizeExtension extends Extension {
                 consolidate,
                 warn: message => console.warn(`[appgrid-size] ${message}`),
             })
+            if (pagesChanged)
+                syncPageManagerPages(this._getAppDisplay(), lm)
             if (consolidate && pagesChanged)
                 this._savePages()
 
             this._forceRelayout(grid)
             this._publishPreviewLayout(grid)
+            if (Main.overview.visible && !this._overviewShowing)
+                this._scheduleSettledPublish()
         } catch (error) {
             this._disconnectGridBindings()
             this._restoreOriginalLayout()
@@ -574,9 +715,11 @@ export default class AppGridSizeExtension extends Extension {
         lm.max_column_spacing = original.maxColumnSpacing
         lm.page_valign = original.pageValign
         lm.page_halign = original.pageHalign
+        this._syncIconSize(lm, original.effectiveIconSize)
         reflowPages(lm, {
             warn: message => console.warn(`[appgrid-size] ${message}`),
         })
+        syncPageManagerPages(this._getAppDisplay(), lm)
         this._forceRelayout(grid)
     }
 

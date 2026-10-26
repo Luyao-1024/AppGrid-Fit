@@ -146,8 +146,12 @@ export function decodePreviewLayout(value) {
                     list.some(item => !validRect(item?.tile ?? item))
             })
             if (!validRect(layout.searchRect) || !validRect(layout.dashRect) ||
-                !validRect(layout.panelRect) || hasInvalidRectList ||
+                !validRect(layout.panelRect) ||
+                !validRect(layout.pageIndicatorRect) ||
+                hasInvalidRectList ||
                 layout.items?.some(item => !validRect(item.icon)) ||
+                (layout.dashVisible !== undefined &&
+                    typeof layout.dashVisible !== 'boolean') ||
                 layout.config?.tileSize !== undefined &&
                     (!Number.isFinite(layout.config.tileSize) ||
                         layout.config.tileSize <= 0) ||

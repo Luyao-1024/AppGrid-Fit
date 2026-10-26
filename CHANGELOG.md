@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.4 — 2026-10-26
+
+- Rebuilt overflowing pages in their original order and mirrored the result into Shell's in-memory `PageManager`, so shrinking the grid no longer scrambles drag-and-drop app order on upstream GNOME Shell.
+- Delayed the settled preview snapshot until overview animations finish, and made the probes wait for a centered page indicator before checking geometry.
+- Fixed the overflow rebuild leaving Shell's `allowIncompletePages` property enabled after restoring the page order.
+- Added an isolated headless Fedora verification harness, made extension-state checks locale-independent, and documented the acceptance contract for both Ubuntu (64 checks) and upstream GNOME Shell (63 checks).
+
+## 1.3.3 — 2026-10-25
+
+- Restored native spacing and CSS spacing limits correctly after theme changes and when disabling the extension, including Ubuntu 26.04's adaptive icon-grid layout.
+- Synced the effective icon size during restoration so Ubuntu no longer leaves spacing derived from the previous fixed icon size.
+- Showed Ubuntu's measured page indicators and left-side dock in the preferences preview instead of a centered horizontal fallback Dock.
+- Coalesced rapid settings and allocation changes into a single apply, and warned only once for missing or unsupported grids.
+- Made the preferences controls scrollable on small displays, sized the window to the monitor, and added a Fit button when the custom grid exceeds the estimated capacity.
+- Added a repeatable Ubuntu VM probe and host verification script covering presets, custom grids, reflow, disable/re-enable, theme changes, consolidation, and page-order restoration.
+
 ## 1.3.2 — 2026-10-25
 
 - Fixed App Grid customization on Ubuntu 26.04, where Shell no longer provides `setGridModes()`.

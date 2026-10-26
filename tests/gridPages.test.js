@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
     reflowPages,
     restorePersistedPageOrder,
+    syncPageManagerPages,
 } from '../gridPages.js'
 
 function page(size) {
@@ -43,6 +44,90 @@ test('normal reflow preserves incomplete page boundaries', () => {
     assert.equal(fills, 0)
 })
 
+test('page manager mirrors reflowed pages in memory', () => {
+    const first = [{id: 'a'}, {id: 'b'}]
+    const second = [{id: 'c'}, {id: 'd'}]
+    const layoutManager = {
+        _pages: [
+            {visibleChildren: first},
+            {visibleChildren: second},
+        ],
+    }
+    const appDisplay = {_pageManager: {_pages: []}}
+
+    assert.equal(syncPageManagerPages(appDisplay, layoutManager), true)
+    assert.deepEqual(appDisplay._pageManager._pages, [
+        {a: {position: 0}, b: {position: 1}},
+        {c: {position: 0}, d: {position: 1}},
+    ])
+    assert.equal(syncPageManagerPages(appDisplay, layoutManager), false)
+    assert.equal(syncPageManagerPages({}, layoutManager), false)
+})
+
+test('overflow reflow rebuilds pages in original order', () => {
+    const items = Array.from({length: 8}, (_, index) => ({
+        id: String.fromCharCode(97 + index),
+    }))
+    const rebuilt = []
+    const layoutManager = {
+        rows_per_page: 2,
+        columns_per_page: 3,
+        _pages: [
+            {children: items, visibleChildren: items},
+        ],
+        _removeItemData(item) {
+            assert.equal(this.allowIncompletePages, true)
+            assert.ok(items.includes(item))
+        },
+        _addItemToPage(item, pageIndex, index) {
+            assert.equal(this.allowIncompletePages, true)
+            assert.equal(index, -1)
+            rebuilt[pageIndex] ??= []
+            rebuilt[pageIndex].push(item)
+        },
+        _updatePages() {
+            throw new Error('Shell page reflow must not reorder items')
+        },
+    }
+
+    assert.equal(reflowPages(layoutManager), true)
+    assert.deepEqual(rebuilt.map(page => page.map(item => item.id)), [
+        ['a', 'b', 'c', 'd', 'e', 'f'],
+        ['g', 'h'],
+    ])
+    assert.equal(Object.hasOwn(layoutManager, 'allowIncompletePages'), false)
+})
+
+test('overflow reflow restores prototype allowIncompletePages', () => {
+    const items = Array.from({length: 5}, (_, index) => ({
+        id: String.fromCharCode(97 + index),
+    }))
+    let allowIncompletePages = false
+    const prototype = {
+        get allowIncompletePages() {
+            return allowIncompletePages
+        },
+        set allowIncompletePages(value) {
+            allowIncompletePages = value
+        },
+    }
+    const layoutManager = Object.assign(Object.create(prototype), {
+        rows_per_page: 2,
+        columns_per_page: 2,
+        _pages: [{children: items, visibleChildren: items}],
+        _removeItemData() {
+            assert.equal(this.allowIncompletePages, true)
+        },
+        _addItemToPage() {
+            assert.equal(this.allowIncompletePages, true)
+        },
+    })
+
+    assert.equal(reflowPages(layoutManager), true)
+    assert.equal(allowIncompletePages, false)
+    assert.equal(Object.hasOwn(layoutManager, 'allowIncompletePages'), false)
+})
+
 test('explicit consolidation fills earlier pages', () => {
     const layoutManager = {
         rows_per_page: 2,
@@ -74,6 +159,19 @@ test('missing private reflow APIs fail without claiming a change', () => {
         warn: message => warnings.push(message),
     }), false)
     assert.deepEqual(warnings, ['page overflow cannot be rearranged'])
+})
+
+test('consolidation stops when the Shell makes no progress', () => {
+    const layoutManager = {
+        rows_per_page: 2,
+        columns_per_page: 3,
+        _pages: [page(3), page(3)],
+        _fillItemVacancies() {},
+    }
+
+    assert.equal(reflowPages(layoutManager, {consolidate: true}), false)
+    assert.deepEqual(
+        layoutManager._pages.map(p => p.visibleChildren.length), [3, 3])
 })
 
 test('saved order is restored before pages are split to the configured capacity', () => {
@@ -109,6 +207,41 @@ test('saved order is restored before pages are split to the configured capacity'
     assert.deepEqual(
         layoutManager._pages.map(p => p.visibleChildren.map(item => item.id)),
         [['a', 'b', 'c', 'd'], ['e', 'f']])
+})
+
+test('adaptive grids keep temporary capacity while restoring saved order', () => {
+    const items = 'abcdef'.split('').map(id => ({id}))
+    const layoutManager = {
+        rows_per_page: 2,
+        columns_per_page: 2,
+        _fixedRows: 2,
+        _fixedCols: 2,
+        _pages: [
+            {visibleChildren: items.slice(0, 4)},
+            {visibleChildren: items.slice(4)},
+        ],
+        adaptToSize() {
+            this.rows_per_page = this._fixedRows
+            this.columns_per_page = this._fixedCols
+        },
+    }
+    const appDisplay = {
+        _redisplay() {
+            assert.equal(layoutManager._fixedRows, 1)
+            assert.equal(layoutManager._fixedCols, 6)
+            layoutManager.adaptToSize()
+            assert.equal(layoutManager.rows_per_page, 1)
+            assert.equal(layoutManager.columns_per_page, 6)
+            layoutManager._pages = [{visibleChildren: items}]
+        },
+    }
+
+    assert.equal(
+        restorePersistedPageOrder(appDisplay, layoutManager), true)
+    assert.equal(layoutManager.rows_per_page, 2)
+    assert.equal(layoutManager.columns_per_page, 2)
+    assert.equal(layoutManager._fixedRows, 2)
+    assert.equal(layoutManager._fixedCols, 2)
 })
 
 test('saved order restoration waits until grid items are available', () => {

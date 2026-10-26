@@ -195,8 +195,29 @@ test('runtime preview layout decoding accepts measured Shell actors', () => {
         ],
         dashRect: {x: 995, y: 1362, width: 572, height: 64},
         dashItems: [{x: 1004, y: 1368, width: 52, height: 52}],
+        pageIndicatorRect: {x: 1236, y: 1370, width: 102, height: 16},
+        dashVisible: true,
     }
     assert.deepEqual(decodePreviewLayout(JSON.stringify(layout)), layout)
+})
+
+test('runtime preview layout rejects invalid page indicators', () => {
+    const layout = {
+        version: 2,
+        monitor: {width: 1920, height: 1080},
+        grid: {
+            x: 0, y: 200, width: 1920, height: 600,
+            paddingTop: 0, paddingRight: 0,
+            paddingBottom: 0, paddingLeft: 0,
+        },
+        itemCount: 0,
+        pageIndicatorRect: {x: 0, y: 0, width: -1, height: 16},
+    }
+    assert.equal(decodePreviewLayout(JSON.stringify(layout)), null)
+
+    layout.pageIndicatorRect = null
+    layout.dashVisible = 'yes'
+    assert.equal(decodePreviewLayout(JSON.stringify(layout)), null)
 })
 
 test('runtime preview layout decoding rejects invalid actor rectangles', () => {

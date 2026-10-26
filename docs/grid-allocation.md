@@ -346,3 +346,22 @@ iconAreaHeight ≈ 58-62% of monitorHeight (varies with dash/search height)
 | `data/.../widgets/_panel.scss` | 10-16 | Panel height: `2.2em` |
 | `data/.../_common.scss` | 31-33 | Base values: padding=6px, margin=4px |
 | `data/.../widgets/_workspace-thumbnails.scss` | 1-26 | Workspace thumbnail CSS |
+
+---
+
+## Ubuntu 26.04 adaptive layout differences
+
+Ubuntu 26.04 ships a patched `IconGridLayout` that no longer exposes `setGridModes()` or
+`_gridModes`. Dimensions are computed during `adaptToSize()` instead:
+
+- `_fixedRows` / `_fixedCols` pin the requested rows and columns.
+- `rows_per_page` / `columns_per_page` must be kept in sync with those private values.
+- `vfunc_style_changed()` derives `row_spacing` and `column_spacing` from `_iconSize * 0.5`
+  rather than reading CSS spacing directly.
+- `max-row-spacing` and `max-column-spacing` still come from CSS and constrain the derived
+  spacing.
+- There is no `_findBestIconSize()`; restoration must preserve or restore the effective
+  `_iconSize` explicitly when `fixed_icon_size` is `-1`.
+
+The extension detects these capabilities instead of matching the distribution name. See
+`docs/ubuntu-26.04-verification.md` for the live verification results.
