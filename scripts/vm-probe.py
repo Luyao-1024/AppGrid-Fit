@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ast
+import copy
 import gettext
 import json
 import os
@@ -8,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 UUID = os.environ.get('EXTENSION_UUID', 'appgrid-size@luyao')
@@ -20,6 +22,11 @@ FOLDER_NAME = 'AppGrid Probe Folder'
 FOLDER_SCHEMA = (
     'org.gnome.desktop.app-folders.folder:'
     f'/org/gnome/desktop/app-folders/folders/{FOLDER_ID}/')
+EXTRA_FOLDER_ID = 'appgrid-probe-extra'
+EXTRA_FOLDER_NAME = 'AppGrid Probe Extra'
+EXTRA_FOLDER_SCHEMA = (
+    'org.gnome.desktop.app-folders.folder:'
+    f'/org/gnome/desktop/app-folders/folders/{EXTRA_FOLDER_ID}/')
 FOLDER_APPS = [
     'appgrid-test-10.desktop',
     'appgrid-test-11.desktop',
@@ -39,6 +46,18 @@ EXTENSION_DIR = DATA_HOME / 'gnome-shell/extensions' / UUID
 SCHEMA_DIR = EXTENSION_DIR / 'schemas'
 EVAL_SCRIPT = Path('/tmp/appgrid-eval.sh')
 EVAL_EXPR = Path('/tmp/appgrid-expr.js')
+SNAPSHOT_HELPER = Path(__file__).resolve().with_name('qemu-snapshot.js')
+EXTENSION_NAME = json.loads(
+    (EXTENSION_DIR / 'metadata.json').read_text(encoding='utf-8'))['name']
+SNAPSHOT_SETTINGS_KEYS = (
+    'use-presets', 'preset-level', 'consolidate-pages',
+    'custom-icon-size', 'custom-rows', 'custom-columns',
+    'custom-row-spacing', 'custom-column-spacing',
+    'folder-rows', 'folder-columns',
+    'folder-row-spacing', 'folder-column-spacing',
+    'folder-title-size', 'folder-edge-padding-auto',
+    'folder-edge-padding', 'show-app-names',
+)
 BUS_ADDRESS = os.environ.get(
     'DBUS_SESSION_BUS_ADDRESS', f'unix:path=/run/user/{os.getuid()}/bus')
 
@@ -302,6 +321,313 @@ def close_apps():
         pass
 
 
+def snapshot_tool(*args):
+    try:
+        result = run([
+            'gjs', '-m', str(SNAPSHOT_HELPER), str(EXTENSION_DIR), *args,
+        ], timeout=90)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f'snapshot helper timed out: {args}') from error
+    if result.returncode:
+        raise RuntimeError(
+            result.stderr.strip() or result.stdout.strip())
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError('snapshot helper produced no output')
+    return lines[-1]
+
+
+def capture_layout(name, summary):
+    return snapshot_tool('capture', name, json.dumps(summary)).strip()
+
+
+def append_layout(snapshot):
+    return snapshot_tool('append', json.dumps(snapshot)).strip()
+
+
+def show_layout(snapshot_id):
+    return json.loads(snapshot_tool('show', snapshot_id))
+
+
+def list_layouts():
+    return json.loads(snapshot_tool('list'))
+
+
+def restore_layout(snapshot_id):
+    snapshot_tool('restore', snapshot_id)
+
+
+ATSPI = None
+
+
+def atspi_module():
+    global ATSPI
+    if ATSPI is not None:
+        return ATSPI
+    try:
+        import gi
+        gi.require_version('Atspi', '2.0')
+        from gi.repository import Atspi
+    except (ImportError, ValueError) as error:
+        raise RuntimeError(
+            f'AT-SPI Python bindings are unavailable: {error}') from error
+    Atspi.init()
+    ATSPI = Atspi
+    return ATSPI
+
+
+def atspi_name(node):
+    try:
+        return node.get_name() or ''
+    except Exception:
+        return ''
+
+
+def atspi_role(node):
+    try:
+        return node.get_role_name()
+    except Exception:
+        return ''
+
+
+def atspi_actions(node):
+    try:
+        iface = node.get_action_iface()
+        if not iface:
+            return []
+        names = []
+        for index in range(iface.get_n_actions()):
+            try:
+                names.append(iface.get_action_name(index))
+            except Exception:
+                continue
+        return names
+    except Exception:
+        return []
+
+
+def atspi_children(node):
+    try:
+        count = node.get_child_count()
+    except Exception:
+        return []
+    children = []
+    for index in range(count):
+        try:
+            child = node.get_child_at_index(index)
+        except Exception:
+            continue
+        if child:
+            children.append(child)
+    return children
+
+
+def atspi_collect(root, predicate, depth=0):
+    matches = []
+    if depth > 50:
+        return matches
+    try:
+        if predicate(root):
+            matches.append(root)
+    except Exception:
+        pass
+    for child in atspi_children(root):
+        matches.extend(atspi_collect(child, predicate, depth + 1))
+    return matches
+
+
+def atspi_find(root, predicate, depth=0):
+    if depth > 50:
+        return None
+    try:
+        if predicate(root):
+            return root
+    except Exception:
+        pass
+    for child in atspi_children(root):
+        found = atspi_find(child, predicate, depth + 1)
+        if found:
+            return found
+    return None
+
+
+def atspi_find_button(root, labels):
+    labels = set(labels)
+    return atspi_find(root, lambda node:
+        atspi_role(node) in ('button', 'push button') and
+        atspi_name(node) in labels)
+
+
+def atspi_click(node, frame):
+    Atspi = atspi_module()
+    try:
+        iface = node.get_action_iface()
+        if iface:
+            for index in range(iface.get_n_actions()):
+                try:
+                    action = iface.get_action_name(index)
+                except Exception:
+                    continue
+                if action in ('click', 'activate'):
+                    iface.do_action(index)
+                    return
+    except Exception:
+        pass
+    component = node.get_component_iface()
+    if not component:
+        raise RuntimeError(
+            f'cannot click {atspi_role(node)} {atspi_name(node)!r}')
+    origin = frame.get_component_iface().get_extents(
+        Atspi.CoordType.SCREEN)
+    extents = component.get_extents(Atspi.CoordType.WINDOW)
+    x = origin.x + extents.x + extents.width // 2
+    y = origin.y + extents.y + extents.height // 2
+    Atspi.generate_mouse_event(x, y, 'b1c')
+
+
+def atspi_invoke(node, action):
+    try:
+        iface = node.get_action_iface()
+        if not iface:
+            return False
+        for index in range(iface.get_n_actions()):
+            try:
+                if iface.get_action_name(index) == action:
+                    iface.do_action(index)
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def atspi_sensitive(node):
+    try:
+        return node.get_state_set().contains(
+            atspi_module().StateType.SENSITIVE)
+    except Exception:
+        return False
+
+
+def atspi_prefs_window():
+    Atspi = atspi_module()
+
+    def lookup():
+        desktop = Atspi.get_desktop(0)
+        for index in range(desktop.get_child_count()):
+            try:
+                app = desktop.get_child_at_index(index)
+            except Exception:
+                continue
+            if not app:
+                continue
+            frame = atspi_find(app, lambda node:
+                atspi_role(node) == 'frame' and
+                atspi_name(node) == EXTENSION_NAME)
+            if frame:
+                return app, frame
+        return None
+
+    return wait_for(lookup, 'preferences window', timeout=30)
+
+
+def launch_prefs_window():
+    env = os.environ.copy()
+    env['WAYLAND_DISPLAY'] = 'appgrid-qemu-probe'
+    result = run(['gnome-extensions', 'prefs', UUID],
+        env=env, timeout=60)
+    if result.returncode:
+        raise RuntimeError(
+            f'could not open preferences (exit {result.returncode}): '
+            f'{result.stderr.strip()[-1000:]}')
+    return atspi_prefs_window()
+
+
+def atspi_wait_label(app, text, timeout=10):
+    return wait_for(
+        lambda: atspi_find(app, lambda node:
+            atspi_role(node) == 'label' and atspi_name(node) == text),
+        f'preferences label {text!r}', timeout=timeout)
+
+
+def atspi_status_texts(app):
+    texts = []
+    for node in atspi_collect(app, lambda item: (
+        atspi_role(item) == 'label' and atspi_name(item) and (
+            atspi_name(item).startswith((
+                'No saved', 'Saved', 'Restored', 'Deleted',
+                'Limit reached')) or '“' in atspi_name(item)))):
+        texts.append(atspi_name(node))
+    return texts
+
+
+def atspi_set_snapshot_name(app, name):
+    def is_entry(node):
+        return (atspi_role(node) in ('text', 'entry') and
+            node.get_editable_text_iface() is not None)
+
+    entry = atspi_find(app, lambda node:
+        is_entry(node) and atspi_name(node) == 'Snapshot name')
+    if entry is None:
+        entry = atspi_find(app, is_entry)
+    if entry is None:
+        raise RuntimeError('snapshot name entry not found')
+    editable = entry.get_editable_text_iface()
+    if not editable or not editable.set_text_contents(name):
+        raise RuntimeError('could not set the snapshot name')
+
+
+def atspi_find_dialog(app):
+    return atspi_find(app, lambda node: atspi_role(node) == 'dialog')
+
+
+def atspi_wait_dialog(app):
+    return wait_for(lambda: atspi_find_dialog(app),
+        'restore confirmation dialog', timeout=10)
+
+
+def atspi_wait_dialog_closed(app):
+    wait_for(lambda: atspi_find_dialog(app) is None,
+        'confirmation dialog to close', timeout=10)
+
+
+def snapshot_store():
+    raw = ast.literal_eval(gs_get('layout-snapshots'))
+    if not raw:
+        return []
+    return json.loads(raw)
+
+
+def read_snapshot_settings():
+    return {key: gs_get(key) for key in SNAPSHOT_SETTINGS_KEYS}
+
+
+def write_snapshot_store(values):
+    gs_set('layout-snapshots', json.dumps(values))
+
+
+def prefs_button(app, labels):
+    button = atspi_find_button(app, labels)
+    if button is None:
+        raise RuntimeError(f'preferences button not found: {labels}')
+    return button
+
+
+def prefs_click_button(app, labels, frame):
+    atspi_click(prefs_button(app, labels), frame)
+
+
+def main_item_ids():
+    return eval_js('''
+const ad = Main.overview._overview._controls.appDisplay;
+const lm = ad._grid.layout_manager;
+JSON.stringify((lm?._pages ?? []).flatMap(
+    page => (page.visibleChildren ?? []).map(item => item.id)))
+''')
+
+
 def folder_state():
     return eval_js(f'''
 const appDisplay = Main.overview._overview._controls.appDisplay;
@@ -446,6 +772,75 @@ folder?._dialog?.popdown();
 ''')
     except Exception:
         pass
+
+
+def app_installed(app_id):
+    return bool(eval_js(
+        f"!!Shell.AppSystem.get_default().lookup_app("
+        f"{json.dumps(app_id)})"))
+
+
+def wait_for_app(app_id, installed, description):
+    try:
+        return wait_for(
+            lambda: app_installed(app_id) is installed,
+            description, timeout=20)
+    except RuntimeError:
+        path = DATA_HOME / 'applications' / app_id
+        try:
+            gio_ids = eval_js('''
+JSON.stringify(imports.gi.Gio.AppInfo.get_all()
+    .map(app => app.get_id())
+    .filter(id => id && id.includes('appgrid-test-9')))
+''')
+        except Exception as error:
+            gio_ids = str(error)
+        print(f'app diagnostic {app_id}: installed={installed} '
+              f'file={path.exists()} lookup={app_installed(app_id)} '
+              f'gio={gio_ids}')
+        raise
+
+
+def write_test_app(app_id):
+    path = DATA_HOME / 'applications' / app_id
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        Path('/usr/share/applications/appgrid-test-10.desktop')
+            .read_text(encoding='utf-8'),
+        encoding='utf-8')
+    return path
+
+
+def remove_test_app(app_id):
+    path = DATA_HOME / 'applications' / app_id
+    path.unlink(missing_ok=True)
+    eval_js("Shell.AppSystem.get_default().emit('installed-changed'); 1")
+
+
+def folder_children():
+    return parse_strv(gs_get_at(
+        'org.gnome.desktop.app-folders', 'folder-children'))
+
+
+def remove_folder(folder_id, reset=False):
+    children = folder_children()
+    if folder_id in children:
+        children.remove(folder_id)
+        gs_set_at('org.gnome.desktop.app-folders', 'folder-children',
+            str(children))
+    if reset:
+        output(['dconf', 'reset', '-f',
+            f'/org/gnome/desktop/app-folders/folders/{folder_id}/'])
+
+
+def create_extra_folder(apps):
+    gs_set_at(EXTRA_FOLDER_SCHEMA, 'name', EXTRA_FOLDER_NAME)
+    gs_set_at(EXTRA_FOLDER_SCHEMA, 'apps', str(apps))
+    children = folder_children()
+    if EXTRA_FOLDER_ID not in children:
+        children.append(EXTRA_FOLDER_ID)
+        gs_set_at('org.gnome.desktop.app-folders', 'folder-children',
+            str(children))
 
 
 def folder_settings_backup():
@@ -1146,6 +1541,576 @@ def check_folder_edge_padding():
     wait_for(lambda: folder_state().get('found'), 'edge padding cleanup')
 
 
+def set_snapshot_layout(icon_size, rows, columns, apps, folder_rows,
+    folder_columns, show_names):
+    gs_set('use-presets', False)
+    gs_set('custom-icon-size', icon_size)
+    gs_set('custom-rows', rows)
+    gs_set('custom-columns', columns)
+    gs_set('custom-row-spacing', 8)
+    gs_set('custom-column-spacing', 14)
+    gs_set('show-app-names', show_names)
+    gs_set('folder-rows', folder_rows)
+    gs_set('folder-columns', folder_columns)
+    gs_set('folder-row-spacing', FOLDER_ROW_SPACING)
+    gs_set('folder-column-spacing', FOLDER_COLUMN_SPACING)
+    gs_set('folder-title-size', FOLDER_TITLE_SIZE)
+    gs_set('folder-edge-padding-auto', True)
+    gs_set_at(FOLDER_SCHEMA, 'apps', str(apps))
+    open_apps()
+    wait_for_config(icon_size, rows, columns)
+
+
+def save_pages():
+    open_apps()
+    eval_js('Main.overview._overview._controls.appDisplay._savePages()')
+    time.sleep(0.5)
+
+
+def layout_summary(icon_size, rows, columns, folder_rows, folder_columns,
+    show_names):
+    return {
+        'iconSize': icon_size,
+        'rows': rows,
+        'columns': columns,
+        'folderRows': folder_rows,
+        'folderColumns': folder_columns,
+        'showNames': show_names,
+        'pages': 1,
+    }
+
+
+def check_layout_snapshots():
+    close_test_folder()
+    layout_a_apps = list(FOLDER_APPS)
+    layout_b_apps = [
+        'appgrid-test-14.desktop',
+        'appgrid-test-15.desktop',
+        'appgrid-test-10.desktop',
+        'appgrid-test-98.desktop',
+    ]
+    set_snapshot_layout(32, 3, 4, layout_a_apps, 3, 4, True)
+    open_test_folder()
+    wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 3 and
+            state.get('columns') == 4 and
+            state.get('itemIds') == layout_a_apps,
+        'snapshot layout A folder')
+    save_pages()
+    layout_a = capture_layout('Layout A', layout_summary(
+        32, 3, 4, 3, 4, True))
+    check('layout A is saved', bool(layout_a), layout_a)
+
+    write_test_app('appgrid-test-99.desktop')
+    write_test_app('appgrid-test-98.desktop')
+    wait_for_app('appgrid-test-99.desktop', True, 'newly installed app')
+    wait_for_app('appgrid-test-98.desktop', True,
+        'folder app installed for uninstall checks')
+    close_test_folder()
+    open_apps()
+    new_app_ids = wait_for(
+        lambda: (ids := main_item_ids()) and
+            'appgrid-test-99.desktop' in ids and ids,
+        'new app in the grid', timeout=20)
+    check('new app appears in the grid before restoring',
+        'appgrid-test-99.desktop' in new_app_ids, new_app_ids[-6:])
+
+    set_snapshot_layout(64, 2, 2, layout_b_apps, 2, 2, False)
+    open_test_folder()
+    wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 2 and
+            state.get('columns') == 2 and
+            state.get('itemIds') == layout_b_apps,
+        'snapshot layout B folder')
+    save_pages()
+    wait_for(
+        lambda: 'appgrid-test-99.desktop' in
+        gs_get_at('org.gnome.shell', 'app-picker-layout'),
+        'new app in the saved picker', timeout=10)
+    layout_b = capture_layout('Layout B', layout_summary(
+        64, 2, 2, 2, 2, False))
+    check('layout B is saved', bool(layout_b), layout_b)
+
+    stored_ids = {item['id'] for item in list_layouts()}
+    check('two independent layouts are stored',
+        {layout_a, layout_b} <= stored_ids, stored_ids)
+    snapshot_a = show_layout(layout_a)
+    snapshot_b = show_layout(layout_b)
+    folder_apps_a = parse_strv(
+        snapshot_a['folders']['items'][FOLDER_ID]['apps']['value'])
+    folder_apps_b = parse_strv(
+        snapshot_b['folders']['items'][FOLDER_ID]['apps']['value'])
+    check('layout A snapshot stores its folder children in order',
+        folder_apps_a == layout_a_apps, folder_apps_a)
+    check('layout B snapshot stores its folder children in order',
+        folder_apps_b == layout_b_apps, folder_apps_b)
+    check('layout A predates the newly installed app',
+        'appgrid-test-99.desktop' not in
+        snapshot_a['appPicker']['value'])
+    check('layout B was captured with the newly installed app',
+        'appgrid-test-99.desktop' in
+        snapshot_b['appPicker']['value'])
+
+    close_test_folder()
+    open_apps()
+    restore_layout(layout_a)
+    wait_for_config(32, 3, 4)
+    check('restore A restores app names',
+        gs_get('show-app-names') == 'true', gs_get('show-app-names'))
+    check('restore A restores folder apps',
+        parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == layout_a_apps,
+        gs_get_at(FOLDER_SCHEMA, 'apps'))
+    open_test_folder()
+    state_a = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 3 and
+            state.get('columns') == 4 and
+            state.get('itemIds') == layout_a_apps and
+            state,
+        'restored layout A folder', timeout=20)
+    check('restore A shows its folder children in order',
+        state_a.get('itemIds') == layout_a_apps, state_a.get('itemIds'))
+    close_test_folder()
+    open_apps()
+    restored_pages = wait_for(
+        lambda: (pages := live_pages()) and
+            'appgrid-test-99.desktop' in flattened(pages) and pages,
+        'new app after restoring layout A', timeout=20)
+    restored_ids = flattened(restored_pages)
+    # Shell assigns apps missing from the restored picker to page 1 and then
+    # shifts them while placing saved items, so assert retention and the
+    # untouched first page rather than an exact slot.
+    new_apps = {'appgrid-test-98.desktop', 'appgrid-test-99.desktop'}
+    check('restoring an older layout keeps newly installed apps',
+        new_apps <= set(restored_ids), restored_ids[-6:])
+    saved_order = [item for page in snapshot_a['appPickerPages']
+        for item in page]
+    saved_set = set(saved_order)
+    check('restore keeps every saved top-level app',
+        saved_set <= set(restored_ids),
+        sorted(saved_set - set(restored_ids)))
+    saved_available = [item for item in saved_order
+        if item in restored_ids]
+    check('restored first page follows the saved order',
+        restored_pages[0] ==
+        saved_available[:len(restored_pages[0])],
+        {'saved': saved_available[:len(restored_pages[0])],
+            'restored': restored_pages[0]})
+    check('new apps are not placed on the first restored page',
+        not (new_apps & set(restored_pages[0])), restored_pages[0])
+
+    open_apps()
+    restore_layout(layout_b)
+    wait_for_config(64, 2, 2)
+    check('restore B restores hidden app names',
+        gs_get('show-app-names') == 'false', gs_get('show-app-names'))
+    check('restore B restores folder apps',
+        parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == layout_b_apps,
+        gs_get_at(FOLDER_SCHEMA, 'apps'))
+    open_test_folder()
+    state_b = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 2 and
+            state.get('columns') == 2 and
+            state.get('itemIds') == layout_b_apps and
+            state,
+        'restored layout B folder', timeout=20)
+    check('restore B shows its folder children in order',
+        state_b.get('itemIds') == layout_b_apps, state_b.get('itemIds'))
+    close_test_folder()
+
+    snapshot_missing = copy.deepcopy(snapshot_a)
+    snapshot_missing['id'] = f'missing-{int(time.time() * 1000)}'
+    snapshot_missing['name'] = 'Layout missing app'
+    snapshot_missing['created'] = datetime.now(timezone.utc) \
+        .isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    missing_apps = parse_strv(
+        snapshot_missing['folders']['items'][FOLDER_ID]['apps']
+        ['value'])
+    missing_apps.append('appgrid-missing.desktop')
+    snapshot_missing['folders']['items'][FOLDER_ID]['apps']['value'] = \
+        str(missing_apps)
+    missing_id = append_layout(snapshot_missing)
+
+    open_apps()
+    restore_layout(missing_id)
+    wait_for_config(32, 3, 4)
+    restored_apps = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
+    check('restore keeps a missing app id in the folder settings',
+        'appgrid-missing.desktop' in restored_apps, restored_apps)
+    open_test_folder()
+    state_missing = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('itemIds') == layout_a_apps and
+            state,
+        'folder after restoring a missing app', timeout=20)
+    check('restore skips a folder app that is not installed',
+        state_missing.get('itemIds') == layout_a_apps,
+        state_missing.get('itemIds'))
+    check('extension stays active after restoring a missing app',
+        extension_active())
+    close_test_folder()
+
+    remove_test_app('appgrid-test-98.desktop')
+    wait_for_app('appgrid-test-98.desktop', False, 'app 98 uninstalled')
+    open_apps()
+    restore_layout(layout_b)
+    wait_for_config(64, 2, 2)
+    uninstalled_b_apps = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
+    check('restore B keeps a really uninstalled folder app id',
+        'appgrid-test-98.desktop' in uninstalled_b_apps,
+        uninstalled_b_apps)
+    open_test_folder()
+    state_uninstalled = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('rows') == 2 and
+            state.get('columns') == 2 and
+            state.get('itemIds') == layout_b_apps[:-1] and
+            state,
+        'folder after a real uninstall', timeout=20)
+    check('restored folder skips a really uninstalled app',
+        state_uninstalled.get('itemIds') == layout_b_apps[:-1],
+        state_uninstalled.get('itemIds'))
+    check('extension stays active after a real folder uninstall',
+        extension_active())
+    close_test_folder()
+
+    write_test_app('appgrid-test-98.desktop')
+    wait_for_app('appgrid-test-98.desktop', True, 'app 98 reinstalled')
+    open_test_folder()
+    state_reinstalled = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('itemIds') == layout_b_apps and
+            state,
+        'folder after reinstalling the app', timeout=20)
+    check('reinstalled app returns to its saved folder position',
+        state_reinstalled.get('itemIds') == layout_b_apps,
+        state_reinstalled.get('itemIds'))
+    close_test_folder()
+
+    remove_test_app('appgrid-test-99.desktop')
+    wait_for_app('appgrid-test-99.desktop', False, 'app 99 uninstalled')
+    open_apps()
+    restore_layout(layout_b)
+    wait_for_config(64, 2, 2)
+    check('restored picker keeps a really uninstalled app id',
+        'appgrid-test-99.desktop' in
+        gs_get_at('org.gnome.shell', 'app-picker-layout'))
+    ids_without_99 = wait_for(
+        lambda: (ids := main_item_ids()) and
+            'appgrid-test-99.desktop' not in ids and ids,
+        'grid after a real top-level uninstall', timeout=20)
+    check('restored grid skips a really uninstalled app',
+        'appgrid-test-99.desktop' not in ids_without_99)
+    check('extension stays active after a real top-level uninstall',
+        extension_active())
+
+    write_test_app('appgrid-test-99.desktop')
+    wait_for_app('appgrid-test-99.desktop', True, 'app 99 reinstalled')
+    ids_with_99 = wait_for(
+        lambda: (ids := main_item_ids()) and
+            'appgrid-test-99.desktop' in ids and ids,
+        'grid after reinstalling the app', timeout=20)
+    check('reinstalled top-level app returns to the saved grid',
+        'appgrid-test-99.desktop' in ids_with_99)
+
+    open_apps()
+    wait_for_config(64, 2, 2)
+    save_pages()
+    same_capacity = capture_layout('Layout same capacity', layout_summary(
+        64, 2, 2, 2, 2, False))
+    same_snapshot = show_layout(same_capacity)
+    gs_set('custom-icon-size', 48)
+    gs_set('show-app-names', True)
+    wait_for_config(48, 2, 2)
+    open_apps()
+    restore_layout(same_capacity)
+    wait_for_config(64, 2, 2)
+    same_pages = wait_for(
+        lambda: (pages := live_pages()) and pages,
+        'same-capacity restore', timeout=20)
+    check('restore keeps page boundaries when the capacity matches',
+        same_pages == same_snapshot['appPickerPages'],
+        {'saved': same_snapshot['appPickerPages'],
+            'restored': same_pages})
+    check('restore still applies the saved label setting',
+        gs_get('show-app-names') == 'false', gs_get('show-app-names'))
+
+    write_test_app('appgrid-test-97.desktop')
+    wait_for_app('appgrid-test-97.desktop', True,
+        'desktop-id rename source installed')
+    open_apps()
+    wait_for(
+        lambda: 'appgrid-test-97.desktop' in main_item_ids(),
+        'rename source in the grid', timeout=20)
+    save_pages()
+    renamed_layout = capture_layout('Layout renamed id', layout_summary(
+        64, 2, 2, 2, 2, False))
+    renamed_snapshot = show_layout(renamed_layout)
+    check('rename snapshot stores the old desktop id',
+        'appgrid-test-97.desktop' in renamed_snapshot['appPicker']['value'],
+        renamed_snapshot['appPicker']['value'][-200:])
+
+    rename_source = DATA_HOME / 'applications' / 'appgrid-test-97.desktop'
+    rename_source.rename(
+        DATA_HOME / 'applications' / 'appgrid-test-96.desktop')
+    eval_js("Shell.AppSystem.get_default().emit('installed-changed'); 1")
+    wait_for_app('appgrid-test-97.desktop', False,
+        'desktop id removed by rename')
+    wait_for_app('appgrid-test-96.desktop', True,
+        'desktop id added by rename')
+
+    open_apps()
+    restore_layout(renamed_layout)
+    wait_for_config(64, 2, 2)
+    check('restored picker keeps the renamed-away desktop id',
+        'appgrid-test-97.desktop' in
+        gs_get_at('org.gnome.shell', 'app-picker-layout'))
+    renamed_pages = wait_for(
+        lambda: (pages := live_pages()) and
+            'appgrid-test-96.desktop' in flattened(pages) and pages,
+        'grid after a desktop-id rename', timeout=20)
+    renamed_ids = flattened(renamed_pages)
+    check('desktop-id rename is not migrated',
+        'appgrid-test-96.desktop' in renamed_ids and
+        'appgrid-test-97.desktop' not in renamed_ids,
+        renamed_ids[-6:])
+    renamed_saved_order = [item for page in
+        renamed_snapshot['appPickerPages'] for item in page]
+    renamed_saved_set = set(renamed_saved_order)
+    check('rename restore drops only the renamed-away id',
+        renamed_saved_set - set(renamed_ids) ==
+        {'appgrid-test-97.desktop'},
+        sorted(renamed_saved_set - set(renamed_ids)))
+    renamed_available = [item for item in renamed_saved_order
+        if item in renamed_ids]
+    check('rename restore keeps the saved first-page order',
+        renamed_pages[0] ==
+        renamed_available[:len(renamed_pages[0])],
+        {'saved': renamed_available[:len(renamed_pages[0])],
+            'restored': renamed_pages[0]})
+    check('renamed app is not placed on the first restored page',
+        'appgrid-test-96.desktop' not in renamed_pages[0], renamed_pages[0])
+    check('extension stays active after a desktop-id rename',
+        extension_active())
+
+    close_test_folder()
+    extra_apps = ['appgrid-test-11.desktop', 'appgrid-test-12.desktop']
+    create_extra_folder(extra_apps)
+    wait_for(
+        lambda: EXTRA_FOLDER_ID in folder_children(),
+        'extra folder created', timeout=10)
+    open_apps()
+    restore_layout(layout_b)
+    wait_for_config(64, 2, 2)
+    children_after_restore = folder_children()
+    check('restoring a snapshot drops a folder created later',
+        EXTRA_FOLDER_ID not in children_after_restore and
+        FOLDER_ID in children_after_restore, children_after_restore)
+    extra_name = ast.literal_eval(
+        gs_get_at(EXTRA_FOLDER_SCHEMA, 'name'))
+    extra_saved_apps = parse_strv(
+        gs_get_at(EXTRA_FOLDER_SCHEMA, 'apps'))
+    check('later folder settings stay orphaned after restore',
+        extra_name == EXTRA_FOLDER_NAME and extra_saved_apps == extra_apps,
+        {'name': extra_name, 'apps': extra_saved_apps})
+    later_ids = wait_for(
+        lambda: (ids := main_item_ids()) and
+            set(extra_apps) <= set(ids) and ids,
+        'apps from the later folder stay in the grid', timeout=20)
+    check('apps from the later folder are not lost',
+        set(extra_apps) <= set(later_ids), later_ids[-8:])
+
+    close_test_folder()
+    remove_folder(FOLDER_ID, reset=True)
+    wait_for(
+        lambda: FOLDER_ID not in folder_children(),
+        'probe folder removed', timeout=10)
+    open_apps()
+    restore_layout(layout_b)
+    wait_for_config(64, 2, 2)
+    check('restoring a snapshot recreates a deleted folder',
+        FOLDER_ID in folder_children(), folder_children())
+    check('recreated folder restores its saved apps',
+        parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == layout_b_apps,
+        gs_get_at(FOLDER_SCHEMA, 'apps'))
+    open_test_folder()
+    state_recreated = wait_for(
+        lambda: (state := folder_state()) and
+            state.get('open') and
+            state.get('itemIds') == layout_b_apps and
+            state,
+        'recreated folder after restore', timeout=20)
+    check('recreated folder opens with its saved children',
+        state_recreated.get('itemIds') == layout_b_apps,
+        state_recreated.get('itemIds'))
+    close_test_folder()
+
+    remove_folder(EXTRA_FOLDER_ID, reset=True)
+    for app_id in ('appgrid-test-96.desktop', 'appgrid-test-98.desktop',
+        'appgrid-test-99.desktop'):
+        (DATA_HOME / 'applications' / f'{app_id}').unlink(
+            missing_ok=True)
+    try:
+        eval_js(
+            "Shell.AppSystem.get_default().emit('installed-changed'); 1")
+    except Exception:
+        pass
+
+
+def check_prefs_ui():
+    gs_set('layout-snapshots', '')
+    saved_settings = read_snapshot_settings()
+    saved_folder_apps = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
+    app, frame = launch_prefs_window()
+    try:
+        row = wait_for(
+            lambda: atspi_find(app, lambda node:
+                atspi_role(node) == 'list item' and
+                atspi_name(node) == 'Layout snapshots'),
+            'Layout snapshots row', timeout=20)
+        atspi_click(row, frame)
+        status = atspi_wait_label(app, 'No saved layouts yet')
+        check('prefs UI opens with no saved layouts',
+            atspi_name(status) == 'No saved layouts yet',
+            atspi_status_texts(app))
+
+        atspi_set_snapshot_name(app, 'Prefs E2E')
+        prefs_click_button(app, ('Save', 'Save current layout'), frame)
+        status = atspi_wait_label(app, 'Saved “Prefs E2E”')
+        check('prefs UI save reports the saved layout',
+            atspi_name(status) == 'Saved “Prefs E2E”',
+            atspi_status_texts(app))
+        store = snapshot_store()
+        check('prefs UI save stores the named layout',
+            len(store) == 1 and store[0].get('name') == 'Prefs E2E',
+            store)
+        stored_settings = store[0].get('settings', {})
+        check('prefs UI save stores every setting',
+            all(stored_settings.get(key, {}).get('value') == value
+                for key, value in saved_settings.items()),
+            stored_settings)
+        folder_item = store[0].get('folders', {}).get('items', {}) \
+            .get(FOLDER_ID, {})
+        stored_folder_apps = parse_strv(
+            folder_item.get('apps', {}).get('value', '[]'))
+        check('prefs UI save stores folder contents',
+            stored_folder_apps == saved_folder_apps,
+            {'expected': saved_folder_apps,
+                'actual': stored_folder_apps})
+        combo = atspi_find(app, lambda node:
+            atspi_role(node) == 'combo box' and
+            atspi_name(node) == 'Saved layouts')
+        check('prefs UI save enables the saved-layout picker',
+            combo is not None and atspi_sensitive(combo),
+            atspi_sensitive(combo) if combo else None)
+
+        for key, value in (
+            ('use-presets', True), ('preset-level', 0),
+            ('consolidate-pages', True), ('custom-icon-size', 96),
+            ('custom-rows', 5), ('custom-columns', 7),
+            ('custom-row-spacing', 24), ('custom-column-spacing', 30),
+            ('folder-rows', 4), ('folder-columns', 5),
+            ('folder-row-spacing', 20), ('folder-column-spacing', 22),
+            ('folder-title-size', 34), ('folder-edge-padding-auto', False),
+            ('folder-edge-padding', 48), ('show-app-names', True),
+        ):
+            gs_set(key, value)
+        mutated_folder_apps = ['appgrid-test-10.desktop']
+        gs_set_at(FOLDER_SCHEMA, 'apps', str(mutated_folder_apps))
+        time.sleep(0.8)
+        mutated_settings = read_snapshot_settings()
+        check('prefs UI mutation changes the stored layout',
+            mutated_settings != saved_settings, mutated_settings)
+
+        prefs_click_button(app, ('Restore',), frame)
+        dialog = atspi_wait_dialog(app)
+        check('prefs UI restore asks for confirmation',
+            dialog is not None, atspi_status_texts(app))
+        atspi_click(prefs_button(dialog, ('Cancel',)), frame)
+        atspi_wait_dialog_closed(app)
+        time.sleep(0.5)
+        check('prefs UI cancel keeps the mutated layout',
+            read_snapshot_settings() == mutated_settings,
+            read_snapshot_settings())
+        check('prefs UI cancel keeps the folder contents',
+            parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) ==
+            mutated_folder_apps, gs_get_at(FOLDER_SCHEMA, 'apps'))
+
+        prefs_click_button(app, ('Restore',), frame)
+        dialog = atspi_wait_dialog(app)
+        atspi_click(prefs_button(dialog, ('Restore',)), frame)
+        atspi_wait_dialog_closed(app)
+        status = atspi_wait_label(app, 'Restored “Prefs E2E”')
+        check('prefs UI confirmation restores every setting',
+            read_snapshot_settings() == saved_settings,
+            read_snapshot_settings())
+        check('prefs UI confirmation restores folder contents',
+            parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) ==
+            saved_folder_apps, gs_get_at(FOLDER_SCHEMA, 'apps'))
+        check('prefs UI confirmation reports success',
+            atspi_name(status) == 'Restored “Prefs E2E”',
+            atspi_status_texts(app))
+
+        prefs_click_button(app, ('Delete',), frame)
+        status = atspi_wait_label(app, 'Deleted “Prefs E2E”')
+        check('prefs UI delete removes the saved layout',
+            snapshot_store() == [], snapshot_store())
+        check('prefs UI delete reports the deletion',
+            atspi_name(status) == 'Deleted “Prefs E2E”',
+            atspi_status_texts(app))
+        restore_button = prefs_button(app, ('Restore',))
+        delete_button = prefs_button(app, ('Delete',))
+        combo = atspi_find(app, lambda node:
+            atspi_role(node) == 'combo box' and
+            atspi_name(node) == 'Saved layouts')
+        check('prefs UI delete disables snapshot actions',
+            not atspi_sensitive(restore_button) and
+            not atspi_sensitive(delete_button) and
+            combo is not None and not atspi_sensitive(combo),
+            {'restore': atspi_sensitive(restore_button),
+                'delete': atspi_sensitive(delete_button),
+                'combo': atspi_sensitive(combo) if combo else None})
+
+        seeds = []
+        for index in range(20):
+            seed = copy.deepcopy(store[0])
+            seed['id'] = f'prefs-e2e-{index}'
+            seed['name'] = f'Seed {index}'
+            seed['created'] = f'2026-01-01T00:00:{index:02d}.000Z'
+            seeds.append(seed)
+        write_snapshot_store(seeds)
+        status = atspi_wait_label(app, 'Saved layouts: 20', timeout=10)
+        check('prefs UI shows the seeded snapshot limit',
+            atspi_name(status) == 'Saved layouts: 20',
+            atspi_status_texts(app))
+        prefs_click_button(app, ('Save', 'Save current layout'), frame)
+        status = atspi_wait_label(
+            app, 'Limit reached (20); delete a snapshot first',
+            timeout=10)
+        check('prefs UI refuses to save beyond the limit',
+            atspi_name(status) ==
+            'Limit reached (20); delete a snapshot first' and
+            len(snapshot_store()) == 20,
+            {'status': atspi_name(status),
+                'count': len(snapshot_store())})
+    finally:
+        try:
+            atspi_invoke(frame, 'window.close')
+        except Exception:
+            pass
+        gs_set('layout-snapshots', '')
+
+
 def check_theme_layout(css_row, css_column, css_max_row, css_max_column):
     properties = eval_js(f'''
 const g = Main.overview._overview._controls.appDisplay._grid;
@@ -1544,6 +2509,8 @@ JSON.stringify({
                 check_folder_icon_sizes()
                 check_paged_folder_fit()
                 check_folder_edge_padding()
+                check_layout_snapshots()
+                check_prefs_ui()
             finally:
                 close_test_folder()
                 restore_test_folder(folder_backup)

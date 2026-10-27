@@ -17,7 +17,6 @@ import {
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
-    SNAPSHOT_SETTINGS_KEYS,
     autoFolderEdgePadding,
     computePreviewColorIndex,
     computeGridFit,
@@ -30,13 +29,16 @@ import {
 } from './config.js';
 import {
     MAX_SNAPSHOTS,
-    SNAPSHOT_VERSION,
     addSnapshot,
     parseSnapshots,
     removeSnapshot,
     serializeSnapshots,
     snapshotLabel,
 } from './snapshots.js';
+import {
+    captureSnapshot,
+    restoreSnapshot,
+} from './snapshotStore.js';
 
 const SHELL_PANEL_H = 30;
 const SHELL_SEARCH_H = 52;
@@ -561,84 +563,17 @@ function readGridConfig(settings) {
     };
 }
 
-function storedValue(settings, key) {
-    const value = settings.get_value(key);
-    return {
-        type: value.get_type_string(),
-        value: value.print(true),
-    };
-}
-
 function applyStoredValue(settings, key, stored) {
     const type = new GLib.VariantType(stored.type);
     const value = GLib.Variant.parse(type, stored.value, null, null);
     settings.set_value(key, value);
 }
 
-function captureFolderSettings(folderSettings) {
-    const children = folderSettings.get_strv('folder-children');
-    const items = {};
-    for (const id of children) {
-        const settings = new Gio.Settings({
-            schema_id: 'org.gnome.desktop.app-folders.folder',
-            path: `${folderSettings.path}folders/${id}/`,
-        });
-        const keys = {};
-        for (const key of settings.list_keys())
-            keys[key] = storedValue(settings, key);
-        items[id] = keys;
-    }
-    return {children, items};
-}
-
-function captureSnapshot(settings, shellSettings, folderSettings, name) {
-    const config = readGridConfig(settings);
-    const picker = shellSettings.get_value('app-picker-layout');
-    const pages = picker.deepUnpack();
-    return {
-        version: SNAPSHOT_VERSION,
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name,
-        created: new Date().toISOString(),
-        settings: Object.fromEntries(SNAPSHOT_SETTINGS_KEYS.map(key =>
-            [key, storedValue(settings, key)])),
-        appPicker: {
-            type: picker.get_type_string(),
-            value: picker.print(true),
-        },
-        folders: captureFolderSettings(folderSettings),
-        summary: {
-            iconSize: config.iconSize,
-            rows: config.rows,
-            columns: config.columns,
-            folderRows: config.folderRows,
-            folderColumns: config.folderColumns,
-            showNames: config.showNames,
-            pages: Array.isArray(pages) ? pages.length : 0,
-        },
-    };
-}
-
-function restoreSnapshot(settings, shellSettings, folderSettings, snapshot) {
-    for (const [id, keys] of Object.entries(snapshot.folders.items)) {
-        const folder = new Gio.Settings({
-            schema_id: 'org.gnome.desktop.app-folders.folder',
-            path: `${folderSettings.path}folders/${id}/`,
-        });
-        for (const [key, stored] of Object.entries(keys))
-            applyStoredValue(folder, key, stored);
-    }
-    folderSettings.set_strv('folder-children',
-        snapshot.folders.children);
-    shellSettings.set_value('app-picker-layout',
-        GLib.Variant.parse(
-            new GLib.VariantType(snapshot.appPicker.type),
-            snapshot.appPicker.value, null, null));
-    for (const key of SNAPSHOT_SETTINGS_KEYS) {
-        const stored = snapshot.settings[key];
-        if (stored)
-            applyStoredValue(settings, key, stored);
-    }
+function folderSettingsFor(folderSettings, id) {
+    return new Gio.Settings({
+        schema_id: 'org.gnome.desktop.app-folders.folder',
+        path: `${folderSettings.path}folders/${id}/`,
+    });
 }
 
 function readFallbackPages(shellSettings, folderSettings, consolidate) {
@@ -1175,8 +1110,26 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     number: snapshots.length + 1,
                 });
             try {
-                const snapshot = captureSnapshot(
-                    settings, shellSettings, folderSettings, name);
+                const config = readGridConfig(settings);
+                const pages = shellSettings
+                    .get_value('app-picker-layout').deepUnpack();
+                const snapshot = captureSnapshot({
+                    settings,
+                    shellSettings,
+                    folderSettings,
+                    folderSettingsFor: id =>
+                        folderSettingsFor(folderSettings, id),
+                    name,
+                    summary: {
+                        iconSize: config.iconSize,
+                        rows: config.rows,
+                        columns: config.columns,
+                        folderRows: config.folderRows,
+                        folderColumns: config.folderColumns,
+                        showNames: config.showNames,
+                        pages: Array.isArray(pages) ? pages.length : 0,
+                    },
+                });
                 snapshots = addSnapshot(snapshots, snapshot);
                 settings.set_string('layout-snapshots',
                     serializeSnapshots(snapshots));
@@ -1224,8 +1177,15 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 if (response !== 1)
                     return;
                 try {
-                    restoreSnapshot(
-                        settings, shellSettings, folderSettings, snapshot);
+                    restoreSnapshot({
+                        settings,
+                        shellSettings,
+                        folderSettings,
+                        folderSettingsFor: id =>
+                            folderSettingsFor(folderSettings, id),
+                        snapshot,
+                        applyStoredValue,
+                    });
                     snapshotStatus.label = formatMessage(
                         _('Restored “{name}”'), {name: snapshot.name});
                 } catch (error) {

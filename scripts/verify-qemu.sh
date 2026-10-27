@@ -26,7 +26,7 @@ KEYS="$CACHE/keys"
 RUNS="$CACHE/runs"
 LOGS="$CACHE/logs"
 KEY="$KEYS/appgrid-test"
-PROVISION_REV=1
+PROVISION_REV=2
 QEMU_MEM=${QEMU_MEM:-4096}
 QEMU_CPUS=${QEMU_CPUS:-2}
 PROVISION_TIMEOUT=${PROVISION_TIMEOUT:-2400}
@@ -179,7 +179,7 @@ configure_case() {
             EXPECTED_LAYOUT_MODE=modes
             EXPECTED_SHELL_MAJOR=46
             SUDO_GROUP=sudo
-            PACKAGES='gnome-shell gjs dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
+            PACKAGES='gnome-shell gjs dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 python3-gi gir1.2-atspi-2.0 at-spi2-core xvfb fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
             ;;
         ubuntu-26.04)
             FAMILY=ubuntu
@@ -189,7 +189,7 @@ configure_case() {
             EXPECTED_LAYOUT_MODE=adaptive
             EXPECTED_SHELL_MAJOR=50
             SUDO_GROUP=sudo
-            PACKAGES='gnome-shell dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
+            PACKAGES='gnome-shell dbus dbus-user-session dconf-cli dconf-gsettings-backend libglib2.0-bin unzip python3 python3-gi gir1.2-atspi-2.0 at-spi2-core xvfb fonts-dejavu-core adwaita-icon-theme libgl1-mesa-dri libegl-mesa0 libgles2'
             ;;
         fedora-44)
             FAMILY=fedora
@@ -201,7 +201,7 @@ configure_case() {
             EXPECTED_LAYOUT_MODE=modes
             EXPECTED_SHELL_MAJOR=50
             SUDO_GROUP=wheel
-            PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
+            PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 python3-gobject at-spi2-core xorg-x11-server-Xvfb sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
             ;;
         fedora-51)
             # Tsinghua does not mirror rawhide; use the upstream image and the
@@ -215,7 +215,7 @@ configure_case() {
             EXPECTED_LAYOUT_MODE=modes
             EXPECTED_SHELL_MAJOR=51
             SUDO_GROUP=wheel
-            PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
+            PACKAGES='gnome-shell dbus-daemon dbus-tools dconf glib2 unzip python3 python3-gobject at-spi2-core xorg-x11-server-Xvfb sudo adwaita-icon-theme dejavu-sans-fonts mesa-dri-drivers mesa-libEGL'
             ;;
         *)
             echo "Unknown case: $CASE" >&2
@@ -678,7 +678,8 @@ import zipfile
 from pathlib import Path
 root, output = map(Path, sys.argv[1:])
 required = ['metadata.json', 'extension.js', 'prefs.js', 'config.js',
-            'gridPages.js', 'gridLayout.js', 'snapshots.js', 'LICENSE']
+            'gridPages.js', 'gridLayout.js', 'snapshots.js', 'snapshotStore.js',
+            'LICENSE']
 schema = root / 'schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml'
 missing = [name for name in required if not (root / name).is_file()]
 if not schema.is_file():
@@ -773,6 +774,7 @@ run_case() {
             -o LogLevel=ERROR
     )
     scp "${scp_opts[@]}" "$zip" "$ROOT/scripts/vm-probe.py" \
+        "$ROOT/scripts/qemu-snapshot.js" \
         "$ROOT/scripts/qemu-guest-probe.sh" \
         "tester@127.0.0.1:/tmp/appgrid-probe/" || {
         echo "Could not copy probe files into the guest" >&2

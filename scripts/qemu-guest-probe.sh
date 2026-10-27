@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run inside a disposable QEMU guest. The guest must already have gnome-shell,
-# dbus-run-session, gnome-extensions, glib-compile-schemas, dconf, unzip and
-# python3. All GNOME state is placed in /tmp; the caller discards the VM overlay.
+# dbus-run-session, gnome-extensions, glib-compile-schemas, dconf, unzip,
+# python3 (with Atspi GI bindings), at-spi2-core and Xvfb. All GNOME state is
+# placed in /tmp; the caller discards the VM overlay.
 set -euo pipefail
 
 EXT_ZIP=${1:?usage: qemu-guest-probe.sh EXTENSION.zip PROBE.py}
@@ -22,7 +23,7 @@ SHELL_LOG="$WORK/shell.log"
 INNER="$WORK/inner.sh"
 
 for command in gnome-shell dbus-run-session glib-compile-schemas \
-    gsettings gdbus dconf unzip python3; do
+    gsettings gdbus dconf unzip python3 gjs Xvfb; do
     command -v "$command" >/dev/null || {
         echo "Missing required guest command: $command"
         exit 1
@@ -63,11 +64,15 @@ gsettings set org.gnome.shell.extensions.appgrid-size custom-columns 3
 gsettings set org.gnome.shell.extensions.appgrid-size custom-row-spacing 8
 gsettings set org.gnome.shell.extensions.appgrid-size custom-column-spacing 16
 
+# AT-SPI's registry needs an X display even though the Shell is Wayland-only.
+Xvfb :999 -screen 0 1280x800x24 -nolisten tcp \
+    >"$WORK/xvfb.log" 2>&1 &
+xvfb_pid=$!
 gnome-shell --headless --wayland --no-x11 --unsafe-mode \
     --wayland-display=appgrid-qemu-probe \
     --virtual-monitor "$MONITOR" >"$WORK/shell.log" 2>&1 &
 shell_pid=$!
-trap 'kill $shell_pid 2>/dev/null || true; wait $shell_pid 2>/dev/null || true' EXIT
+trap 'kill $shell_pid $xvfb_pid 2>/dev/null || true; wait $shell_pid $xvfb_pid 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 120); do
     sleep 1
@@ -155,6 +160,8 @@ eval_shell "Main.extensionManager.disableExtension('$EXTENSION_UUID'); 1" \
     >/dev/null 2>&1 || true
 kill "$shell_pid" 2>/dev/null || true
 wait "$shell_pid" 2>/dev/null || true
+kill "$xvfb_pid" 2>/dev/null || true
+wait "$xvfb_pid" 2>/dev/null || true
 exit "$probe_status"
 INNER
 
@@ -167,7 +174,18 @@ export XDG_DATA_HOME="$WORK/data"
 export XDG_CACHE_HOME="$WORK/cache"
 export GSETTINGS_SCHEMA_DIR="$EXT_DIR/schemas"
 export DISPLAY=:999
-export NO_AT_BRIDGE=1
+export GDK_BACKEND=x11
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+unset LANGUAGE
+if [ -x /usr/sbin/getenforce ] &&
+    [ "$(/usr/sbin/getenforce)" = Enforcing ]; then
+    # The isolated at-spi bus launcher is blocked by the enforcing policy.
+    sudo -n /usr/sbin/setenforce 0 || {
+        echo 'Could not set SELinux permissive for the AT-SPI bus'
+        exit 1
+    }
+fi
 export EXPECTED_LAYOUT_MODE
 export EXPECTED_SHELL_MAJOR
 export MONITOR
