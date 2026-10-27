@@ -254,10 +254,40 @@ the extension settings as `{type, value}` GVariant text (so booleans, ints and s
 trip without type guessing), the complete `org.gnome.shell app-picker-layout` value, every
 `org.gnome.desktop.app-folders` child and its per-folder keys, plus a summary used by the
 combo row. `snapshots.js` validates, sorts newest-first, caps the list at 20 and provides the
-display label. Restoring writes folder definitions first, then `app-picker-layout`, then the
-extension settings; Shell's `PageManager` reloads saved pages from the setting change and
-the extension's normal apply/reflow pass settles the grid. The preferences window asks for
-confirmation before replacing the current layout.
+display label; `snapshotStore.js` captures and restores the data through injected settings
+and variant adapters. Restoring writes folder definitions first, then `app-picker-layout`,
+then the extension settings; Shell's `PageManager` reloads saved pages from the setting
+change and the extension's normal apply/reflow pass settles the grid. Snapshots record the
+layout settings, not the installed app set: ids for apps uninstalled after capture stay in
+the saved data and are skipped by Shell, while apps installed after capture are absent from
+the saved picker and Shell places them on a later page. Inserting those apps can shift
+saved items across page boundaries, so the exact post-install order is Shell's choice; no
+saved item is lost and the first page follows the saved order. Restoring writes the picker
+before the extension settings, so Shell repages against the capacity active before the
+restore; page boundaries survive exactly only when that capacity matches the saved one
+(see Known Limitations). The preferences window asks for confirmation before replacing the
+current layout.
+
+The snapshot/current-state policy is a fixed contract; every row has an executable check:
+
+| Current state vs. snapshot | Restore result | Guard |
+|---|---|---|
+| App installed after capture | Kept; Shell places it on a later page (page 1 by its own rule). Inserting it can shift saved items locally, so the exact order is Shell's; no saved item is lost and page 0 follows the saved order | QEMU restores Layout A with two later installs and checks retention, the saved first-page prefix and off-page-0 placement |
+| App uninstalled after capture | Saved id stays in folder settings/picker; Shell skips it; reinstall returns it to the saved slot | QEMU real uninstall/reinstall for folder and top-level apps |
+| Desktop id renamed after capture | Old id behaves like an uninstall, new id like a new install; no migration | QEMU renames 97→96 plus unit test |
+| Folder created after capture | Dropped from `folder-children`; its settings stay orphaned; its apps remain installed | QEMU extra folder |
+| Folder deleted after capture | Recreated from the saved keys and children | QEMU deleted folder |
+| Grid capacity unchanged at restore | Saved page grouping is restored exactly | QEMU saves and restores at the same 2×2 capacity and compares every page |
+| Current picker changed after capture | Replaced wholesale, not merged | Unit test |
+
+The preferences UI is exercised through AT-SPI. The QEMU probe launches the real
+`gnome-extensions prefs` window, opens the Layout snapshots page by clicking the real row,
+types the snapshot name through `EditableText`, invokes the Save, Restore, Delete and
+confirmation-dialog button actions, and reads the status labels from the accessibility
+tree. It asserts the saved settings, folder contents, status messages, button sensitivity,
+and the 20-snapshot limit. GTK 4.14 (Ubuntu 24.04) exposes buttons as role `push button`
+while newer GTK uses `button`, so the probe accepts both; the Save button is named after
+its action row (`Save current layout`) and its child label is `Save`.
 
 ### CSS override defense
 
@@ -485,7 +515,7 @@ from the window's `close-request` signal. Every signal is disconnected from its 
 | `readIconSize(settings)` | Resolves the active preset or custom icon size |
 | `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, folderTitleSize, folderEdgePaddingAuto, folderEdgePadding, showNames}` |
 | `drawFolderPreviewSection(...)` | Draws the full configured rows/columns (empty cells dimmed) with gaps, icon size, title-bar height, effective edge padding, optional labels and a square panel for square grids |
-| `captureSnapshot` / `restoreSnapshot` | Stores/restores GVariant settings, app-picker layout and folder definitions |
+| `captureSnapshot` / `restoreSnapshot` (`snapshotStore.js`) | Stores/restores GVariant settings, app-picker layout and folder definitions |
 | `refreshSnapshotRows` | Rebuilds the saved-layout ComboRow from `parseSnapshots()` |
 
 ### Grid preview (DrawingArea)
@@ -614,6 +644,7 @@ gnome-extensions pack --force \
   --extra-source=gridPages.js \
   --extra-source=gridLayout.js \
   --extra-source=snapshots.js \
+  --extra-source=snapshotStore.js \
   --extra-source=LICENSE \
   "$(pwd)"
 gnome-extensions install --force appgrid-size@luyao.shell-extension.zip
@@ -654,9 +685,14 @@ verifies `Main.layoutManager.primaryMonitor` matches `MONITOR`, enables the exte
 runs `scripts/vm-probe.py`. Each case also passes `EXPECTED_SHELL_MAJOR` so the guest fails
 early if the image does not actually run the intended GNOME Shell major (46, 50 or 51). `--no-x11` is required: without it, libgvc synchronously connects
 to Xwayland before the compositor can service it, wedging the Shell main loop.
-`--unsafe-mode` replaces the old helper extension. `HOME`, `XDG_*`, `GSETTINGS_SCHEMA_DIR`
-and `DISPLAY=:999` must be exported **before** `dbus-run-session` so activated services such
-as dconf use the isolated config instead of `/home/tester`.
+`--unsafe-mode` replaces the old helper extension. `HOME`, `XDG_*`, `GSETTINGS_SCHEMA_DIR`,
+`DISPLAY=:999`, `GDK_BACKEND=x11` and a UTF-8 `LANG` must be exported **before**
+`dbus-run-session` so activated services such as dconf use the isolated config instead of
+`/home/tester`. Xvfb provides the X display required by the AT-SPI registry even though the
+Shell itself stays on headless Wayland; the prefs process is an X11 client on that display.
+Fedora runs `setenforce 0` because the enforcing policy blocks the isolated accessibility
+bus launcher. Guest images install `at-spi2-core`, the Atspi GI bindings (`python3-gi` and
+`gir1.2-atspi-2.0` on Ubuntu, `python3-gobject` on Fedora) and Xvfb.
 
 The guest script preconfigures a 2×3 custom grid before enabling the extension, so the
 `app-picker-layout` captured at probe start uses the same 6-item page capacity it is restored
@@ -670,9 +706,28 @@ edge padding and dialog resizing, paged arrow-strip preservation, symmetric side
 square panels for square grids, dialog fit, edit-button scaling, app-name visibility in the
 grid and folder, folder paging/reflow, and the disable-restoration check.
 The paging check temporarily grows the folder to six apps, shrinks its capacity to 2×2,
-grows it back and restores the original app list. Acceptance is the probe exit status; a
-failing run copies the guest work directory and Shell log into `<cache>/logs/`, and the run
-overlay is still discarded unless `--keep-overlay` is used.
+grows it back and restores the original app list. The snapshot check saves Layout A and
+Layout B through `scripts/qemu-snapshot.js`, restores them in turn, and asserts each
+layout's folder child order. It then installs a new dummy app, restores the older layout
+and checks the app is still present, and finally restores a snapshot containing an
+uninstalled folder app to verify Shell skips it without disabling the extension. The
+same section installs and later removes dummy desktop files to exercise a real uninstall:
+restoring a snapshot must skip the missing folder and top-level apps, keep their ids, and
+show them again after reinstalling them. It also creates a folder after a snapshot and
+restores the snapshot to check the later folder is dropped from `folder-children` while
+its settings survive, then deletes the snapshot's folder and restores the snapshot to
+check it is recreated with its saved apps. The same section verifies that later installs
+are kept off the first page, that no saved item is lost, and that the first page follows
+the saved order, and that renaming a desktop id is treated as an uninstall plus a new
+install, with the new id following the same new-app placement rule. A same-capacity save,
+icon/label change and restore must reproduce every saved page exactly. Finally the probe
+launches the real preferences window and drives it through AT-SPI: it saves a named layout,
+verifies that Cancel keeps the mutated layout, confirms the real restore dialog and
+compares every stored setting and the folder contents, deletes the layout, and seeds 20
+layouts to check the limit message.
+Acceptance is the probe exit status; a failing run copies the guest work directory and
+Shell log into `<cache>/logs/`, and the run overlay is still discarded unless
+`--keep-overlay` is used.
 
 Host requirements: x86_64 Linux, QEMU, OpenSSH client, curl, python3, `gettext`
 (`msgfmt`), `timeout`, and one of
@@ -740,15 +795,17 @@ To add a language, create `po/<lang>.po`, add the code to `po/LINGUAS`, run
 | `gridPages.js` | Testable saved-order restoration, page overflow, and optional consolidation adapter |
 | `gridLayout.js` | Capability detection, dimension overrides, folder layout/dialog sizing/name helpers, restoration for upstream and Ubuntu layouts |
 | `snapshots.js` | Validation, ordering, cap and display labels for saved layout snapshots |
+| `snapshotStore.js` | Capture/restore of extension settings, app-picker layout and folder definitions |
+| `scripts/qemu-snapshot.js` | Guest-side GJS helper used by the QEMU probe to capture/restore snapshots |
 | `extension.js` | Enable/disable, find grid, override layout, balanced fit, folder layout, names, persist pages |
 | `prefs.js` | Adw prefs window: `_buildControlsPane` (left) + `_buildPreviewPane` with Cairo drawing (right) |
 | `po/zh_CN.po` | Simplified Chinese gettext catalog for the UI and metadata |
 | `po/LINGUAS` | Languages compiled into `locale/` during packaging |
 | `po/POTFILES.in` | Sources scanned for translatable strings |
-| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/dialog sizing/names/paging, snapshots and i18n coverage |
+| `tests/*.test.js` | Node unit tests for shared calculations, page reflow, folder layout/dialog sizing/names/paging, snapshot capture/restore, and i18n coverage |
 | `.github/workflows/ci.yml` | Source, schema, Shexli, package-policy validation, and artifact build |
 | `scripts/validate-extension.mjs` | Local metadata, runtime API, import, gettext and ZIP review checks used by CI |
-| `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation/localization assertions for both layouts |
+| `scripts/vm-probe.py` | Guest-side layout/theme/reflow/consolidation/localization and AT-SPI preferences UI assertions |
 | `scripts/verify-qemu.sh` | Host orchestrator: cached cloud images, golden provisioning, disposable per-run overlays |
 | `scripts/qemu-guest-probe.sh` | In-guest isolated headless-Shell runner used by `verify-qemu.sh` |
 | `LICENSE` | MIT license text |
@@ -790,6 +847,11 @@ GNOME Shell 51 keeps the same private grid, folder and `PageManager` APIs used h
 3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new
    order through Shell's page manager. Disabling the extension restores grid properties but
    cannot reconstruct the previous application order.
-4. **Fallback preview estimates fixed pixel values**: Before the overview has published a
+4. **Snapshot page boundaries follow the pre-restore capacity**: `restoreSnapshot` writes the
+   picker before the extension settings, so Shell rebuilds pages against the grid capacity
+   active before the restore. A snapshot saved with a different rows×columns value is
+   repaged: saved apps, folders and the saved first-page order survive, but the number of
+   apps per page and the exact page of later installs are Shell's choice.
+5. **Fallback preview estimates fixed pixel values**: Before the overview has published a
    settled actor snapshot, `estimateGridArea()` uses the `SHELL_*` constants derived from
    GNOME Shell 50 source. These may differ across themes, font sizes, or display scaling.

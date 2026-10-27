@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.3.5 — 2026-10-27
 
+- Layout snapshot capture and restore moved into a testable `snapshotStore.js`, with unit tests for stored GVariant types, picker replacement and folder keys. QEMU now verifies the full consistency contract: real uninstall/reinstall, apps installed after a snapshot, desktop-id renames, folders created or deleted later, orphaned folder settings, exact page grouping at the same grid size, and Shell's repaging when the grid size changed.
+- The preferences window is now exercised through AT-SPI by driving the real `gnome-extensions prefs` window: the probe opens the Layout snapshots page, types a name, saves, cancels and confirms the restore dialog, deletes, and checks the 20-snapshot limit. Guests run Xvfb for the accessibility bus, Fedora runs the isolated bus with SELinux permissive, and both GTK button role variants (`button` and `push button`) are accepted.
 - Added GNOME Shell 51 support and a Fedora rawhide QEMU case that verifies the extension against GNOME Shell 51.1 without touching the host desktop.
 - Folder edge padding is now icon-aware and configurable. Automatic mode follows `clamp(icon_size / 4, 12, 24)`, so 96 px icons use 24 px, 64 px uses 16 px, and 48/32 px uses 12 px; turning automatic off exposes a manual 0–96 px value. Both values are saved in snapshots, the preferences preview redraws immediately with the effective padding and states whether it is automatic or manual, and paged folders keep Shell's navigation-arrow side room while their top and bottom margins follow the setting.
 - Folder dialogs are now fully configurable: icon size follows the main grid, with independent rows, columns, row/column spacing, exact-gap alignment and CSS limit removal. The preferences window draws a dedicated folder-dialog preview and the probe checks 32 px/96 px child icons, configured dimensions/gaps and restoration on disable.

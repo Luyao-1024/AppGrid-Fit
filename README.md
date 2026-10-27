@@ -2,7 +2,7 @@
 
 A GNOME Shell extension (46–51) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
-Current version: **1.3.4**
+Current version: **1.3.5**
 
 ## Features
 
@@ -11,7 +11,7 @@ Current version: **1.3.4**
 - **Custom mode**: Fine-tune icon size, rows, columns, row/column spacing independently
 - **Configurable folder dialogs**: Choose the folder dialog's icon size, rows, columns, gaps, title size and edge padding, with a dedicated live preview in the preferences window; child icons, labels and spacing follow the same settings, the dialog always keeps the configured grid area (a 3×3 folder shows 3×3 even with fewer apps), and the panel fits that grid with balanced, icon-aware edge padding while keeping the folder name and edit button inside and centered. Edge padding follows the icon size by default (12–24 px) and can be overridden manually, paged folders keep the navigation-arrow side room, the edit button scales with the title, a title size of 0 follows the system theme, and square grids (3×3, 4×4 and similar) keep a square panel background
 - **Show or hide application names**: Toggles labels under apps and folders in both the App Grid and folder dialogs, and the preview reflects the choice
-- **Layout snapshots**: Save the current grid, app order, folder contents and visibility settings as a named snapshot, keep up to 20, and restore any of them after confirming the replacement
+- **Layout snapshots**: Save the current grid, app order, folder contents and visibility settings as a named snapshot, keep up to 20, and restore any of them after confirming the replacement. Snapshots record the layout rather than the installed app set: apps installed after a snapshot are kept and placed by GNOME Shell on a later page (later installs can shift nearby saved items), saved ids for uninstalled apps stay in the snapshot but are skipped by Shell, renaming an app's desktop id is treated as an uninstall plus a new install, page grouping is restored exactly when the grid size matches the snapshot, and restoring a snapshot saved with a different grid size lets Shell recompute the page grouping
 - **Optional page consolidation**: Fills pages to capacity and saves the resulting app order only when explicitly enabled
 - **Persistent app order**: Keeps drag-and-drop positions stable across login even when a page contains more than Shell's default 24 apps
 - **Order-preserving reflow**: Shrinking the grid rebuilds overflow pages in their original order instead of letting Shell move items to the front of the next page
@@ -74,6 +74,7 @@ gnome-extensions pack --force \
   --extra-source=gridPages.js \
   --extra-source=gridLayout.js \
   --extra-source=snapshots.js \
+  --extra-source=snapshotStore.js \
   --extra-source=LICENSE \
   "$(pwd)"
 
