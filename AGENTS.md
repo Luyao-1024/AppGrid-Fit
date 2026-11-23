@@ -253,20 +253,21 @@ Snapshots are stored as JSON in the `layout-snapshots` GSettings string. Each en
 the extension settings as `{type, value}` GVariant text (so booleans, ints and strings round
 trip without type guessing), the complete `org.gnome.shell app-picker-layout` value, every
 `org.gnome.desktop.app-folders` child and its per-folder keys, plus a summary used by the
-combo row. `snapshots.js` validates, sorts newest-first, caps the list at 20 and provides the
+snapshot list. `snapshots.js` validates, sorts newest-first, caps the list at 20 and provides the
 display label; `snapshotStore.js` captures and restores the data through injected settings
 and variant adapters. Restoring writes folder definitions first, then `app-picker-layout`,
-then the extension settings; Shell's `PageManager` reloads saved pages from the setting
-change and the extension's normal apply/reflow pass settles the grid. Snapshots record the
+then the extension settings. When the extension is active, preferences requests a Shell-side
+restore that applies the saved dimensions and rebuilds visible pages from the saved item IDs
+and positions. Restoring any snapshot switches to manual order. When automatic sorting
+is active, the confirmation dialog explains that it will turn off.
+Snapshots record the
 layout settings, not the installed app set: ids for apps uninstalled after capture stay in
 the saved data and are skipped by Shell, while apps installed after capture are absent from
 the saved picker and Shell places them on a later page. Inserting those apps can shift
 saved items across page boundaries, so the exact post-install order is Shell's choice; no
-saved item is lost and the first page follows the saved order. Restoring writes the picker
-before the extension settings, so Shell repages against the capacity active before the
-restore; page boundaries survive exactly only when that capacity matches the saved one
-(see Known Limitations). The preferences window asks for confirmation before replacing the
-current layout.
+saved item is lost and the first page follows the saved order. The active extension applies
+the restored capacity before rebuilding and puts additional apps on later pages. The
+preferences window asks for confirmation before replacing the current layout.
 
 The snapshot/current-state policy is a fixed contract; every row has an executable check:
 
@@ -281,7 +282,7 @@ The snapshot/current-state policy is a fixed contract; every row has an executab
 | Current picker changed after capture | Replaced wholesale, not merged | Unit test |
 
 The preferences UI is exercised through AT-SPI. The QEMU probe launches the real
-`gnome-extensions prefs` window, opens the Layout snapshots page by clicking the real row,
+`gnome-extensions prefs` window, opens the Layout snapshots pane by clicking the real row,
 types the snapshot name through `EditableText`, invokes the Save, Restore, Delete and
 confirmation-dialog button actions, and reads the status labels from the accessibility
 tree. It asserts the saved settings, folder contents, status messages, button sensitivity,
@@ -452,56 +453,39 @@ overrides.
 
 ### Layout
 
-The prefs window uses a horizontal `Gtk.Paned` inside a single `Adw.PreferencesRow`.
+The prefs window uses `Adw.OverlaySplitView` inside a single `Adw.PreferencesGroup`.
 `findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1400 so both panes
-receive their natural width. The default window size is monitor-aware: 760–1200 wide and
-420–560 tall.
+receive their natural width. The default window size is monitor-aware: 480–1240 wide and
+420–660 tall. At 940 px and below, the preview and snapshots open as overlays.
 
-The left pane is a `Gtk.Stack` with slide transitions. Its root page is a short navigation
-menu, so users click into a category instead of scrolling through every setting; each
-subpage has a back header and its own scroller, and the right preview pane stays outside the
-stack and visible on every page. The root rows show a live summary of the current
-configuration. Preset and custom grid rows swap inside the App grid page, and row/column
-spacing collapses into `Adw.ExpanderRow` controls. The right pane is also a `Gtk.Stack`: the
-overview preview stays for the root, App grid, Layout snapshots and Advanced pages, while the
-Folder dialog page switches it to a full folder-dialog preview.
+The left pane is a `Gtk.Stack` with a home menu and three subpages. Each subpage has a back
+header and its own scroller. The right pane pairs those controls with the overview preview,
+folder preview, or saved-layout list. The left navigation calls `showPage(name)` to update
+both stacks. The right pane exposes a close button in drawer mode.
 
 ```
 fillPreferencesWindow(window)
-  └─ paned (Gtk.Paned, horizontal, position 420)
-       ├─ _buildPreviewPane(settings, window) → {widget: previewScroller, cleanupFns[], setPage}
-       │    └─ previewScroller (Gtk.ScrolledWindow) → previewRoot
-       │         └─ previewStack (Gtk.Stack, CROSSFADE)
-       │              ├─ overviewPage — screenLabel, Adw.Clamp → AspectFrame →
-       │              │                   previewFrame (Cairo grid, css 'card'),
-       │              │                   fitLabel, fitButton
-       │              └─ folderPage   — folderLabel ("Folder dialog preview · R × C"),
-       │                                  Adw.Clamp → AspectFrame → folderFrame
-       │                                  (Cairo folder preview, css 'card'), folderCaption
-       └─ _buildControlsPane(settings, window, setPage) → {widget: stack, cleanupFns[]}
-            └─ stack (Gtk.Stack, SLIDE_LEFT_RIGHT) — root page + four subpages
-                 ├─ root      — Layout group: "App grid", "Folder dialog" nav rows
-                 │                Options group: app-name SwitchRow,
-                 │                "Layout snapshots", "Advanced" nav rows
-                 │                (subtitles summarize grid, folder and snapshot state)
-                 ├─ grid      — back header + "Grid size" group: preset switch, ComboRow
-                 │                and info, or custom icon/rows/columns SpinRows,
-                 │                Spacing ExpanderRow and info
-                 ├─ folder    — back header + "Folder grid" group: Rows, Columns,
-                 │                Title size, automatic-edge SwitchRow, edge SpinRow,
-                 │                Spacing ExpanderRow and info
-                 ├─ snapshots — back header + "Saved layouts": name entry, save row,
-                 │                saved-layout ComboRow, restore/delete buttons, status
-                 └─ advanced  — back header + "Page consolidation" SwitchRow
+  └─ splitView (Adw.OverlaySplitView, preview at the end)
+       ├─ controls (Gtk.Stack)
+       │    ├─ root      — navigation and app-name switch
+       │    ├─ grid      — preset or custom grid controls, sorting and page consolidation
+       │    ├─ folder    — folder grid controls
+       │    └─ snapshots — name entry and save controls
+       └─ sidebar: compact close button + Gtk.Stack
+            ├─ root   — Cairo overview preview shared by home and App grid
+            ├─ folder — Cairo folder dialog preview
+            └─ snapshots — selectable list and fixed restore/delete footer
 ```
 
-`showPage(name, back)` switches the left stack and calls the preview pane's `setPage()`
-callback, so the right preview follows the active category.
+The left stack slides between home and a subpage and fades between subpages. The right
+stack fades in place when its content changes. Home and App grid share the overview
+preview. The back button returns from Layout snapshots to the page that opened it.
+On a narrow window, the drawer can be dismissed independently of the selected page.
 
 Each subpage is a `Gtk.Box` holding a back header (`go-previous-symbolic` flat button and a
 `title-4` label) plus a `Gtk.ScrolledWindow` wrapping its content box.
 `addNavRow()` adds an `Adw.ActionRow` with a `go-next-symbolic` suffix and switches pages on
-`activated`; `showPage(name, back)` picks the slide direction. `updateRootRows()` refreshes
+`activated`. `updateRootRows()` refreshes
 the root subtitles from the preset/custom, folder and snapshot settings.
 
 `fillPreferencesWindow` collects cleanup functions from both panes and invokes them once
@@ -516,7 +500,7 @@ from the window's `close-request` signal. Every signal is disconnected from its 
 | `readGridConfig(settings)` | Reads preset/custom and folder settings → `{iconSize, rows, columns, rowGap, colGap, usePresets, folderRows, folderColumns, folderRowSpacing, folderColumnSpacing, folderTitleSize, folderEdgePaddingAuto, folderEdgePadding, showNames}` |
 | `drawFolderPreviewSection(...)` | Draws the full configured rows/columns (empty cells dimmed) with gaps, icon size, title-bar height, effective edge padding, optional labels and a square panel for square grids |
 | `captureSnapshot` / `restoreSnapshot` (`snapshotStore.js`) | Stores/restores GVariant settings, app-picker layout and folder definitions |
-| `refreshSnapshotRows` | Rebuilds the saved-layout ComboRow from `parseSnapshots()` |
+| `refreshSnapshotRows` | Rebuilds the saved-layout list from `parseSnapshots()` and selects by snapshot ID |
 
 ### Grid preview (DrawingArea)
 
@@ -642,6 +626,7 @@ gnome-extensions pack --force \
   --gettext-domain=appgrid-size@luyao \
   --extra-source=config.js \
   --extra-source=gridPages.js \
+  --extra-source=gridSort.js \
   --extra-source=gridLayout.js \
   --extra-source=snapshots.js \
   --extra-source=snapshotStore.js \
@@ -847,11 +832,9 @@ GNOME Shell 51 keeps the same private grid, folder and `PageManager` APIs used h
 3. **Persisted consolidation is irreversible**: Enabling `consolidate-pages` writes the new
    order through Shell's page manager. Disabling the extension restores grid properties but
    cannot reconstruct the previous application order.
-4. **Snapshot page boundaries follow the pre-restore capacity**: `restoreSnapshot` writes the
-   picker before the extension settings, so Shell rebuilds pages against the grid capacity
-   active before the restore. A snapshot saved with a different rows×columns value is
-   repaged: saved apps, folders and the saved first-page order survive, but the number of
-   apps per page and the exact page of later installs are Shell's choice.
+4. **Snapshot page boundaries depend on available capacity**: Preset size and monitor
+   changes can produce a different capacity from the saved layout. The Shell-side restore
+   splits any saved page that exceeds the restored capacity.
 5. **Fallback preview estimates fixed pixel values**: Before the overview has published a
    settled actor snapshot, `estimateGridArea()` uses the `SHELL_*` constants derived from
    GNOME Shell 50 source. These may differ across themes, font sizes, or display scaling.

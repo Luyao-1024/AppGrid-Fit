@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
     reflowPages,
+    replaceGridPages,
     restorePersistedPageOrder,
     syncPageManagerPages,
 } from '../gridPages.js'
@@ -62,6 +63,39 @@ test('page manager mirrors reflowed pages in memory', () => {
     ])
     assert.equal(syncPageManagerPages(appDisplay, layoutManager), false)
     assert.equal(syncPageManagerPages({}, layoutManager), false)
+})
+
+test('replacing pages keeps hidden actors and updates the Shell item order', () => {
+    const first = {id: 'first', visible: true}
+    const second = {id: 'second', visible: true}
+    const hidden = {id: 'hidden', visible: false}
+    const layoutManager = {
+        allowIncompletePages: false,
+        _pages: [{children: [first, hidden]}, {children: [second]}],
+        _removeItemData(item) {
+            assert.equal(this.allowIncompletePages, true)
+            const page = this._pages.find(page => page.children.includes(item))
+            page.children = page.children.filter(child => child !== item)
+            if (!page.children.some(child => child.visible))
+                this._pages.splice(this._pages.indexOf(page), 1)
+        },
+        _addItemToPage(item, index) {
+            this._pages[index] ??= {children: []}
+            this._pages[index].children.push(item)
+        },
+    }
+    let relayouts = 0
+    const orderedItems = [first, hidden, second]
+    const appDisplay = {
+        _orderedItems: orderedItems,
+        _grid: {queue_relayout() { relayouts++ }},
+    }
+
+    replaceGridPages(appDisplay, layoutManager, [[second, hidden], [first]])
+    assert.deepEqual(layoutManager._pages.map(page => page.children), [[second, hidden], [first]])
+    assert.deepEqual(orderedItems, [second, hidden, first])
+    assert.equal(layoutManager.allowIncompletePages, false)
+    assert.equal(relayouts, 1)
 })
 
 test('overflow reflow rebuilds pages in original order', () => {

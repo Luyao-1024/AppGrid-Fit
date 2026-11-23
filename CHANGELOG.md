@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The right preferences pane follows the left navigation and fades when its content changes. Layout snapshots show the save controls on the left and the scrollable list on the right. Page consolidation is now under App grid → Application order.
+- Added opt-in app-grid sorting by display name, with ascending and descending order, three folder positions, and automatic placement of new apps. Restoring a layout snapshot reapplies the saved icon order and switches to manual order. The confirmation dialog explains the switch when automatic sorting is active.
+
 ## 1.3.5 — 2026-10-27
 
 - Layout snapshot capture and restore moved into a testable `snapshotStore.js`, with unit tests for stored GVariant types, picker replacement and folder keys. QEMU now verifies the full consistency contract: real uninstall/reinstall, apps installed after a snapshot, desktop-id renames, folders created or deleted later, orphaned folder settings, exact page grouping at the same grid size, and Shell's repaging when the grid size changed.

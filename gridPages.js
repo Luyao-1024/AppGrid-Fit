@@ -133,6 +133,31 @@ export function syncPageManagerPages(appDisplay, layoutManager) {
     return true
 }
 
+export function replaceGridPages(appDisplay, layoutManager, pages) {
+    const items = layoutManager._pages.flatMap(page => page.children)
+    const savedAllowIncompletePages = layoutManager.allowIncompletePages
+    layoutManager.allowIncompletePages = true
+    try {
+        for (const item of items.filter(item => !item.visible))
+            layoutManager._removeItemData(item)
+        for (const item of items.filter(item => item.visible))
+            layoutManager._removeItemData(item)
+
+        pages.forEach((page, index) => {
+            for (const item of page)
+                layoutManager._addItemToPage(item, index, -1)
+        })
+        appDisplay._orderedItems.splice(0, appDisplay._orderedItems.length,
+            ...pages.flat())
+    } finally {
+        if (savedAllowIncompletePages === undefined)
+            delete layoutManager.allowIncompletePages
+        else
+            layoutManager.allowIncompletePages = savedAllowIncompletePages
+    }
+    appDisplay._grid.queue_relayout()
+}
+
 export function reflowPages(layoutManager, {consolidate = false, warn} = {}) {
     if (!Array.isArray(layoutManager._pages))
         return false

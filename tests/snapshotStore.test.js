@@ -177,6 +177,49 @@ test('restore rewrites folder keys, folder list, picker and settings in order', 
     assert.equal(settings.values.get('show-app-names').print(), 'false')
 })
 
+test('a legacy snapshot returns automatic sorting to manual', () => {
+    const settings = new FakeSettings('ext', {
+        'app-grid-sort-order': variant('s', "'ascending'"),
+        'app-grid-folder-position': variant('s', "'last'"),
+    })
+    restoreSnapshot({
+        settings,
+        shellSettings: new FakeSettings('shell'),
+        folderSettings: new FakeSettings('folders'),
+        snapshot: {
+            settings: {},
+            appPicker: stored('aa{sv}', '[]'),
+            folders: {children: [], items: {}},
+        },
+        applyStoredValue: applyStored,
+    })
+    assert.equal(settings.get_value('app-grid-sort-order').print(), "'manual'")
+    assert.equal(settings.get_value('app-grid-folder-position').print(), "'mixed'")
+})
+
+test('a sorted snapshot restores manual order and retains the folder preference', () => {
+    const settings = new FakeSettings('ext', {
+        'app-grid-sort-order': variant('s', "'descending'"),
+        'app-grid-folder-position': variant('s', "'last'"),
+    })
+    restoreSnapshot({
+        settings,
+        shellSettings: new FakeSettings('shell'),
+        folderSettings: new FakeSettings('folders'),
+        snapshot: {
+            settings: {
+                'app-grid-sort-order': stored('s', "'ascending'"),
+                'app-grid-folder-position': stored('s', "'first'"),
+            },
+            appPicker: stored('aa{sv}', '[]'),
+            folders: {children: [], items: {}},
+        },
+        applyStoredValue: applyStored,
+    })
+    assert.equal(settings.get_value('app-grid-sort-order').print(), "'manual'")
+    assert.equal(settings.get_value('app-grid-folder-position').print(), "'first'")
+})
+
 test('two layouts restore their own folder children and grid settings', () => {
     const settings = new FakeSettings('ext', {})
     const shellSettings = new FakeSettings('shell', {

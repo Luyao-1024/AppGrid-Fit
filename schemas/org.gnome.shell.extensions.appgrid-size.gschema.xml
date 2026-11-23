@@ -104,6 +104,26 @@
       <description>Show labels under application and folder icons in the app grid and folder dialogs.</description>
     </key>
 
+    <key type="s" name="app-grid-sort-order">
+      <choices>
+        <choice value="manual"/>
+        <choice value="ascending"/>
+        <choice value="descending"/>
+      </choices>
+      <default>'manual'</default>
+      <summary>Application grid order</summary>
+    </key>
+
+    <key type="s" name="app-grid-folder-position">
+      <choices>
+        <choice value="mixed"/>
+        <choice value="first"/>
+        <choice value="last"/>
+      </choices>
+      <default>'mixed'</default>
+      <summary>Folder position when sorting the application grid</summary>
+    </key>
+
     <key type="s" name="layout-snapshots">
       <default>''</default>
       <summary>Saved layout snapshots</summary>

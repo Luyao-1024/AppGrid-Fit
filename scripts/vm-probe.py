@@ -57,6 +57,7 @@ SNAPSHOT_SETTINGS_KEYS = (
     'folder-row-spacing', 'folder-column-spacing',
     'folder-title-size', 'folder-edge-padding-auto',
     'folder-edge-padding', 'show-app-names',
+    'app-grid-sort-order', 'app-grid-folder-position',
 )
 BUS_ADDRESS = os.environ.get(
     'DBUS_SESSION_BUS_ADDRESS', f'unix:path=/run/user/{os.getuid()}/bus')
@@ -801,12 +802,12 @@ JSON.stringify(imports.gi.Gio.AppInfo.get_all()
         raise
 
 
-def write_test_app(app_id):
+def write_test_app(app_id, name='AppGrid Test 10'):
     path = DATA_HOME / 'applications' / app_id
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         Path('/usr/share/applications/appgrid-test-10.desktop')
-            .read_text(encoding='utf-8'),
+            .read_text(encoding='utf-8').replace('Name=AppGrid Test 10', f'Name={name}'),
         encoding='utf-8')
     return path
 
@@ -1967,6 +1968,192 @@ def check_layout_snapshots():
         pass
 
 
+def check_grid_sort():
+    def sort_grid(descending, position, name=''):
+        return ast.literal_eval(output([
+            'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell',
+            '--object-path', '/org/gnome/Shell/Extensions/AppGridFit',
+            '--method', 'org.gnome.Shell.Extensions.AppGridFit.SortGrid',
+            str(descending).lower(), position, name,
+        ]))
+
+    def expected_order(descending, position):
+        return eval_js(f'''
+const display = Main.overview._overview._controls.appDisplay;
+const folders = new Set(display._folderIcons);
+const groups = [[], []];
+const collator = new Intl.Collator();
+for (const item of display._grid.layout_manager._pages.flatMap(page => page.visibleChildren))
+    groups[Number(folders.has(item))].push(item);
+for (const group of groups)
+    group.sort((left, right) => ({-1 if descending else 1}) *
+        collator.compare(left.name, right.name));
+JSON.stringify({"groups.reverse().flat()" if position == 'first' else 'groups.flat()'}
+    .map(item => item.id));
+''')
+
+    def restore_grid(snapshot_id):
+        return output([
+            'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell',
+            '--object-path', '/org/gnome/Shell/Extensions/AppGridFit',
+            '--method', 'org.gnome.Shell.Extensions.AppGridFit.RestoreLayout',
+            snapshot_id,
+        ]) == '(true,)'
+
+    close_test_folder()
+    open_apps()
+    removed_ids = {'appgrid-test-96.desktop', 'appgrid-test-98.desktop',
+        'appgrid-test-99.desktop'}
+    wait_for(lambda: removed_ids.isdisjoint(main_item_ids()),
+        'grid after the snapshot test apps are uninstalled', timeout=30)
+    previous_store = gs_get('layout-snapshots')
+    app_ids = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
+    new_app = 'appgrid-sort-new.desktop'
+    try:
+        check('application ordering defaults to manual',
+            gs_get('app-grid-sort-order') == "'manual'", gs_get('app-grid-sort-order'))
+        gs_set('layout-snapshots', '')
+        ascending = expected_order(False, 'first')
+        result = sort_grid(False, 'first')
+        check('sorting without backup sorts across pages and puts folders first',
+            result[0] in ('sorted', 'unchanged') and
+            flattened(live_pages()) == ascending and not snapshot_store(),
+            result)
+        persisted_before = gs_get_at('org.gnome.shell', 'app-picker-layout')
+        eval_js('''
+const display = Main.overview._overview._controls.appDisplay;
+display._moveItem(display._grid.getItemsAtPage(0)[1], 0, 0);
+true;
+''')
+        before = live_pages()
+        check('the live pre-sort layout differs from its saved order',
+            flattened(before) != ascending and
+            gs_get_at('org.gnome.shell', 'app-picker-layout') == persisted_before,
+            before[0])
+        size = len(before[0])
+        descending = expected_order(True, 'last')
+        result, snapshot_id = sort_grid(True, 'last', 'Before sorting')
+        after = live_pages()
+        check('descending sort fills pages with folders last',
+            result == 'sorted' and len(after) > 1 and
+            all(len(page) == size for page in after[:-1]) and
+            flattened(after) == descending and
+            parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == app_ids,
+            result)
+        backup = show_layout(snapshot_id)
+        check('the sort backup captures the live pre-sort pages',
+            backup['appPickerPages'] == before, backup['appPickerPages'])
+        picker = gs_get_at('org.gnome.shell', 'app-picker-layout')
+        seed = snapshot_store()[0]
+        write_snapshot_store([dict(seed, id=f'full-sort-{index}') for index in range(20)])
+        result = sort_grid(False, 'first', 'Full backup')
+        check('a full snapshot store preserves the current arrangement',
+            result == ('full', '') and live_pages() == after and
+            gs_get_at('org.gnome.shell', 'app-picker-layout') == picker and
+            len(snapshot_store()) == 20, result)
+        write_snapshot_store([seed])
+        check('Shell accepts a request to restore the sort backup', restore_grid(snapshot_id))
+        restored = live_pages()
+        check('restoring a sorted backup restores each page and turns sorting off',
+            restored == before and gs_get('app-grid-sort-order') == "'manual'",
+            {'before': before, 'restored': restored, 'mode': gs_get('app-grid-sort-order')})
+
+        legacy = dict(seed, id='legacy-sort-backup', settings={
+            key: value for key, value in seed['settings'].items()
+            if key not in ('app-grid-sort-order', 'app-grid-folder-position')})
+        write_snapshot_store([legacy])
+        eval_js('''
+const display = Main.overview._overview._controls.appDisplay;
+display._moveItem(display._grid.getItemsAtPage(0)[1], 0, 0);
+true;
+''')
+        check('repro live order differs even when the saved picker matches the backup',
+            live_pages() != before and
+            gs_get_at('org.gnome.shell', 'app-picker-layout') == backup['appPicker']['value'],
+            live_pages()[0])
+        check('restoring an older snapshot rebuilds the grid and returns to manual',
+            restore_grid(legacy['id']) and live_pages() == before and
+            gs_get('app-grid-sort-order') == "'manual'", gs_get('app-grid-sort-order'))
+
+        gs_set('layout-snapshots', '')
+        sort_grid(True, 'last')
+        gs_set('app-grid-sort-order', 'manual')
+        before_ui = live_pages()
+        app, frame = launch_prefs_window()
+        try:
+            grid_row = wait_for(lambda: atspi_find(app, lambda node:
+                atspi_role(node) == 'list item' and
+                atspi_name(node) == 'App grid'), 'App grid row')
+            atspi_click(grid_row, frame)
+            sort_labels = ('Sort…', 'Sort by name…')
+            wait_for(lambda: atspi_find_button(app, sort_labels), 'sort button')
+            prefs_click_button(app, sort_labels, frame)
+            dialog = wait_for(lambda: atspi_find(app, lambda node:
+                atspi_role(node) in ('dialog', 'frame') and
+                atspi_name(node) == 'Sort by name'), 'sort dialog')
+            manual = wait_for(lambda: atspi_find(dialog, lambda node:
+                atspi_role(node) in ('radio button', 'check box') and
+                atspi_name(node) == 'Manual order'), 'manual sort option')
+            check('preferences defaults to the manual option',
+                manual.get_state_set().contains(atspi_module().StateType.CHECKED))
+            ascending_option = wait_for(lambda: atspi_find(dialog, lambda node:
+                atspi_role(node) in ('radio button', 'check box') and
+                atspi_name(node) == 'A → Z'), 'ascending sort option')
+            atspi_click(ascending_option, dialog)
+            sort_action = wait_for(lambda: atspi_find_button(dialog, ('Sort',)), 'apply alphabetical sort')
+            atspi_click(sort_action, dialog)
+            atspi_wait_label(app, 'App grid sorted')
+            store = snapshot_store()
+            check('preferences sort saves a backup by default',
+                len(store) == 1 and live_pages() != before_ui and
+                show_layout(store[0]['id'])['appPickerPages'] == before_ui, store)
+            prefs_click_button(app, ('View backup',), frame)
+            atspi_wait_label(app, 'Saved layouts: 1')
+            prefs_button(app, ('Save',))
+            restore_detail = 'This replaces the current layout settings, app order and folder contents.'
+            prefs_click_button(app, ('Restore',), frame)
+            confirmation = atspi_wait_dialog(app)
+            atspi_wait_label(confirmation,
+                restore_detail + '\n\n' +
+                'Restoring automatically switches to manual order and turns off automatic sorting.')
+            prefs_click_button(confirmation, ('Restore',), frame)
+            atspi_wait_dialog_closed(app)
+            status = f'Restored “{store[0]["name"]}”'
+            try:
+                atspi_wait_label(app, status)
+            except RuntimeError:
+                print('restore status:', [atspi_name(node) for node in
+                    atspi_collect(app, lambda node: atspi_name(node).startswith('Could not restore'))])
+                raise
+            restored_ui = live_pages()
+            check('preferences restores the backed-up arrangement and manual mode',
+                restored_ui == before_ui and gs_get('app-grid-sort-order') == "'manual'",
+                {'before': before_ui, 'restored': restored_ui,
+                    'mode': gs_get('app-grid-sort-order'),
+                    'saved mode': store[0]['settings'].get('app-grid-sort-order')})
+            prefs_click_button(app, ('Restore',), frame)
+            confirmation = atspi_wait_dialog(app)
+            atspi_wait_label(confirmation, restore_detail)
+            prefs_click_button(confirmation, ('Cancel',), frame)
+            atspi_wait_dialog_closed(app)
+            prefs_click_button(app, ('Back',), frame)
+            atspi_wait_label(app, 'App grid sorted')
+        finally:
+            atspi_invoke(frame, 'window.close')
+
+        sort_grid(True, 'last')
+        write_test_app(new_app, 'ZZZZ AppGrid Sort Probe')
+        wait_for_app(new_app, True, 'new app installed with auto-sort enabled')
+        wait_for(lambda: main_item_ids()[0] == new_app, 'new app sorted to the first position')
+        check('auto-sort applies the selected order to new apps',
+            main_item_ids()[0] == new_app and gs_get('app-grid-sort-order') == "'descending'")
+        gs_set('app-grid-sort-order', 'manual')
+    finally:
+        if (DATA_HOME / 'applications' / new_app).exists():
+            remove_test_app(new_app)
+        gs_set('layout-snapshots', previous_store)
+
+
 def check_prefs_ui():
     gs_set('layout-snapshots', '')
     saved_settings = read_snapshot_settings()
@@ -2007,12 +2194,10 @@ def check_prefs_ui():
             stored_folder_apps == saved_folder_apps,
             {'expected': saved_folder_apps,
                 'actual': stored_folder_apps})
-        combo = atspi_find(app, lambda node:
-            atspi_role(node) == 'combo box' and
-            atspi_name(node) == 'Saved layouts')
-        check('prefs UI save enables the saved-layout picker',
-            combo is not None and atspi_sensitive(combo),
-            atspi_sensitive(combo) if combo else None)
+        atspi_wait_label(app, 'Prefs E2E')
+        check('prefs UI save shows the saved name and enables its actions',
+            all(atspi_sensitive(prefs_button(app, (label,)))
+                for label in ('Restore', 'Delete')))
 
         for key, value in (
             ('use-presets', True), ('preset-level', 0),
@@ -2070,16 +2255,10 @@ def check_prefs_ui():
             atspi_status_texts(app))
         restore_button = prefs_button(app, ('Restore',))
         delete_button = prefs_button(app, ('Delete',))
-        combo = atspi_find(app, lambda node:
-            atspi_role(node) == 'combo box' and
-            atspi_name(node) == 'Saved layouts')
         check('prefs UI delete disables snapshot actions',
-            not atspi_sensitive(restore_button) and
-            not atspi_sensitive(delete_button) and
-            combo is not None and not atspi_sensitive(combo),
+            not atspi_sensitive(restore_button) and not atspi_sensitive(delete_button),
             {'restore': atspi_sensitive(restore_button),
-                'delete': atspi_sensitive(delete_button),
-                'combo': atspi_sensitive(combo) if combo else None})
+                'delete': atspi_sensitive(delete_button)})
 
         seeds = []
         for index in range(20):
@@ -2510,6 +2689,7 @@ JSON.stringify({
                 check_paged_folder_fit()
                 check_folder_edge_padding()
                 check_layout_snapshots()
+                check_grid_sort()
                 check_prefs_ui()
             finally:
                 close_test_folder()
