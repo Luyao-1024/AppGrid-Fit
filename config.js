@@ -3,6 +3,8 @@ export const UNCONSTRAINED_SPACING = -1
 export const MIN_GRID_DIMENSION = 2
 export const PRESET_WIDTH_RATIO = 4 / 5
 export const PREVIEW_LAYOUT_KEY = 'runtime-preview-layout'
+export const SORT_ORDER_KEY = 'app-grid-sort-order'
+export const FOLDER_POSITION_KEY = 'app-grid-folder-position'
 export const DEFAULT_PAGE_CAPACITY = 24
 export const FALLBACK_PREVIEW_TILE_OVERHEAD = 53
 
@@ -16,7 +18,7 @@ export const SETTINGS_KEYS = [
     'folder-edge-padding', 'show-app-names',
 ]
 
-export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS]
+export const SNAPSHOT_SETTINGS_KEYS = [...SETTINGS_KEYS, SORT_ORDER_KEY, FOLDER_POSITION_KEY]
 
 export const FOLDER_MIN_DIMENSION = 2
 export const FOLDER_MAX_DIMENSION = 6

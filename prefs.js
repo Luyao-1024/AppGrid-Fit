@@ -3,6 +3,7 @@ import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
+import Pango from 'gi://Pango';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
@@ -13,10 +14,12 @@ import {
     FOLDER_MAX_SPACING,
     FOLDER_MAX_TITLE_SIZE,
     FOLDER_MIN_DIMENSION,
+    FOLDER_POSITION_KEY,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    SORT_ORDER_KEY,
     autoFolderEdgePadding,
     computePreviewColorIndex,
     computeGridFit,
@@ -27,6 +30,7 @@ import {
     resolveFolderEdgePadding,
     resolvePreviewPages,
 } from './config.js';
+import {FOLDER_POSITIONS, SORT_INTERFACE, SORT_ORDERS, SORT_PATH} from './gridSort.js';
 import {
     MAX_SNAPSHOTS,
     addSnapshot,
@@ -566,7 +570,8 @@ function readGridConfig(settings) {
 function applyStoredValue(settings, key, stored) {
     const type = new GLib.VariantType(stored.type);
     const value = GLib.Variant.parse(type, stored.value, null, null);
-    settings.set_value(key, value);
+    if (!settings.set_value(key, value))
+        throw new Error(key);
 }
 
 function folderSettingsFor(folderSettings, id) {
@@ -574,6 +579,139 @@ function folderSettingsFor(folderSettings, id) {
         schema_id: 'org.gnome.desktop.app-folders.folder',
         path: `${folderSettings.path}folders/${id}/`,
     });
+}
+
+function sortOrderLabels() {
+    return [_('Manual order'), _('A → Z'), _('Z → A')];
+}
+
+function showGridSortDialog(window, settings, cancellable, onComplete, onManageBackups) {
+    const dialog = new Adw.Window({
+        title: _('Sort by name'),
+        transient_for: window,
+        destroy_with_parent: true,
+        modal: true,
+        resizable: false,
+        default_width: 440,
+    });
+    const view = new Adw.ToolbarView();
+    view.add_top_bar(new Adw.HeaderBar());
+    dialog.set_content(view);
+    const content = new Gtk.Box({
+        orientation: Gtk.Orientation.VERTICAL,
+        spacing: 12,
+        margin_start: 18, margin_end: 18, margin_bottom: 18,
+    });
+    view.set_content(content);
+
+    const options = new Adw.PreferencesGroup();
+    const direction = new Adw.ActionRow({title: _('Sort direction')});
+    const directionBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 4});
+    const directionButtons = sortOrderLabels().map(label => new Gtk.CheckButton({label}));
+    for (const [index, button] of directionButtons.entries()) {
+        if (index > 0)
+            button.set_group(directionButtons[0]);
+        directionBox.append(button);
+    }
+    directionButtons[SORT_ORDERS.indexOf(settings.get_string(SORT_ORDER_KEY))].active = true;
+    direction.add_suffix(directionBox);
+    const position = new Adw.ComboRow({
+        title: _('Folder position'),
+        model: Gtk.StringList.new([
+            _('Sort by name with apps'), _('Always first'), _('Always last'),
+        ]),
+        selected: FOLDER_POSITIONS.indexOf(settings.get_string(FOLDER_POSITION_KEY)),
+    });
+    const backup = new Adw.SwitchRow({
+        title: _('Save current layout before sorting'),
+        active: true,
+    });
+    options.add(direction);
+    options.add(position);
+    options.add(backup);
+    content.append(options);
+
+    const feedback = new Gtk.Label({
+        visible: false, wrap: true, xalign: 0, css_classes: ['error'],
+    });
+    content.append(feedback);
+    const actions = new Gtk.Box({spacing: 6, halign: Gtk.Align.END});
+    const manageButton = new Gtk.Button({label: _('Manage snapshots'), visible: false});
+    const cancelButton = new Gtk.Button({label: _('Cancel')});
+    const sortButton = new Gtk.Button({label: _('Sort'), css_classes: ['suggested-action']});
+    actions.append(manageButton);
+    actions.append(cancelButton);
+    actions.append(sortButton);
+    content.append(actions);
+
+    let pending = false;
+    const updateDirection = () => {
+        const manual = directionButtons[0].active;
+        position.sensitive = backup.sensitive = !manual;
+        sortButton.label = manual ? _('Apply') : _('Sort');
+    };
+    for (const button of directionButtons) {
+        button.connect('toggled', () => {
+            if (button.active)
+                updateDirection();
+        });
+    }
+    updateDirection();
+    dialog.connect('close-request', () => pending);
+    cancelButton.connect('clicked', () => dialog.close());
+    manageButton.connect('clicked', () => {
+        dialog.close();
+        onManageBackups();
+    });
+    sortButton.connect('clicked', () => {
+        if (directionButtons[0].active) {
+            if (settings.set_string(SORT_ORDER_KEY, 'manual')) {
+                dialog.close();
+                onComplete('manual', '');
+            } else {
+                feedback.label = _('Could not save the sorting options.');
+                feedback.visible = true;
+            }
+            return;
+        }
+        const backupName = backup.active ? _('Before sorting') : '';
+        pending = true;
+        options.sensitive = actions.sensitive = false;
+        feedback.visible = manageButton.visible = false;
+        Gio.DBus.session.call('org.gnome.Shell', SORT_PATH, SORT_INTERFACE,
+            'SortGrid', new GLib.Variant('(bss)', [directionButtons[2].active,
+                FOLDER_POSITIONS[position.selected], backupName]),
+            new GLib.VariantType('(ss)'), Gio.DBusCallFlags.NONE, 10000,
+            cancellable, (connection, result) => {
+                let status;
+                let snapshotId;
+                try {
+                    [status, snapshotId] = connection.call_finish(result).deepUnpack();
+                } catch (_error) {
+                    status = 'unavailable';
+                }
+                if (cancellable.is_cancelled())
+                    return;
+                pending = false;
+                options.sensitive = actions.sensitive = true;
+
+                if (status === 'sorted' || status === 'unchanged' || snapshotId) {
+                    dialog.close();
+                    onComplete(status, snapshotId);
+                } else {
+                    const errors = {
+                        full: _('Snapshots are full. Delete one or turn off the backup to sort.'),
+                        'backup-failed': _('Could not save a backup. Try again or turn off the backup to sort.'),
+                        'sort-failed': _('Could not sort the app grid.'),
+                        unavailable: _('Sorting is unavailable. Make sure AppGrid Fit is enabled and try again.'),
+                    };
+                    feedback.label = errors[status] ?? errors.unavailable;
+                    feedback.visible = true;
+                    manageButton.visible = status === 'full';
+                }
+            });
+    });
+    dialog.present();
 }
 
 function readFallbackPages(shellSettings, folderSettings, consolidate) {
@@ -628,8 +766,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const monitorWidth = monitor?.get_geometry().width ?? 1280;
         const monitorHeight = monitor?.get_geometry().height ?? 800;
         window.set_default_size(
-            Math.max(760, Math.min(1200, monitorWidth - 80)),
-            Math.max(420, Math.min(560, monitorHeight - 120)));
+            Math.max(480, Math.min(1240, monitorWidth - 64)),
+            Math.max(420, Math.min(660, monitorHeight - 100)));
 
         const page = new Adw.PreferencesPage({
             title: _('App Grid'),
@@ -643,41 +781,107 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             pageClamp.tightening_threshold = 900;
         }
 
-        const rootGroup = new Adw.PreferencesGroup({});
+        const rootGroup = new Adw.PreferencesGroup({vexpand: true});
         page.add(rootGroup);
 
-        const rootRow = new Adw.PreferencesRow({
-            activatable: false,
-            selectable: false,
-            focusable: false,
+        const splitView = new Adw.OverlaySplitView({
+            vexpand: true,
+            css_classes: ['card'],
+            overflow: Gtk.Overflow.HIDDEN,
+            sidebar_position: Gtk.PackType.END,
+            sidebar_width_unit: Adw.LengthUnit.PX,
+            sidebar_width_fraction: 0.54,
+            min_sidebar_width: 300,
+            max_sidebar_width: 740,
+        });
+        const compact = new Adw.Breakpoint({
+            condition: Adw.BreakpointCondition.parse('max-width: 940px'),
         });
 
-        const paned = new Gtk.Paned({
-            orientation: Gtk.Orientation.HORIZONTAL,
-            position: 420,
-            shrink_start_child: true,
-            shrink_end_child: true,
-            resize_start_child: false,
-            resize_end_child: true,
-        });
-
-        const {widget: preview, cleanupFns: prevFns, setPage} =
-            this._buildPreviewPane(settings, window);
+        const {overview, folder, cleanupFns: prevFns} = this._buildPreviewPane(settings, window);
         cleanupFns.push(...prevFns);
 
-        const {widget: controlsBox, cleanupFns: ctrlFns} =
-            this._buildControlsPane(settings, window, setPage);
+        const sidebar = new Gtk.Stack({
+            transition_type: Gtk.StackTransitionType.CROSSFADE,
+            transition_duration: 130,
+            vexpand: true,
+        });
+        const previewButton = new Gtk.Button({
+            label: _('Show preview'),
+            halign: Gtk.Align.END,
+            margin_top: 8,
+            margin_end: 20,
+            css_classes: ['flat'],
+        });
+        const closePaneButton = new Gtk.Button({
+            icon_name: 'window-close-symbolic',
+            tooltip_text: _('Close pane'),
+            css_classes: ['flat'],
+            halign: Gtk.Align.END,
+            margin_top: 8,
+            margin_end: 20,
+        });
+        previewButton.connect('clicked', () => splitView.show_sidebar = true);
+        closePaneButton.connect('clicked', () => splitView.show_sidebar = false);
+
+        let snapshotBackPage = 'root';
+        const updateSidebarWidth = () => {
+            splitView.sidebar_width_fraction = splitView.collapsed ? 0.9 : 0.54;
+            splitView.enable_show_gesture = splitView.collapsed;
+            previewButton.visible = splitView.collapsed;
+            closePaneButton.visible = splitView.collapsed;
+        };
+        const showPage = (name, reveal = false) => {
+            const previous = controls.visible_child_name;
+            if (previous !== name) {
+                if (name === 'snapshots')
+                    snapshotBackPage = previous;
+                controls.transition_type = previous === 'root' || name === 'root'
+                    ? Gtk.StackTransitionType.SLIDE_LEFT_RIGHT
+                    : Gtk.StackTransitionType.CROSSFADE;
+                controls.set_visible_child_name(name);
+                sidebar.set_visible_child_name(name === 'grid' ? 'root' : name);
+                previewButton.label = name === 'snapshots' ? _('Show saved layouts') : _('Show preview');
+            }
+            if (reveal)
+                splitView.show_sidebar = true;
+        };
+        const goBack = () => {
+            const fromSnapshots = controls.visible_child_name === 'snapshots';
+            if (splitView.collapsed)
+                splitView.show_sidebar = false;
+            showPage(fromSnapshots ? snapshotBackPage : 'root');
+        };
+        compact.add_setter(splitView, 'collapsed', true);
+        connectSignal(cleanupFns, splitView, 'notify::collapsed', updateSidebarWidth);
+        const {controls, snapshotsPane, cleanupFns: ctrlFns} =
+            this._buildSettingsPanes(settings, window, {showPage, goBack});
         cleanupFns.push(...ctrlFns);
 
-        paned.set_start_child(controlsBox);
-        paned.set_end_child(preview);
-        rootRow.set_child(paned);
-        rootGroup.add(rootRow);
+        const controlsBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
+        controlsBox.append(previewButton);
+        controlsBox.append(controls);
+        sidebar.add_named(overview, 'root');
+        sidebar.add_named(folder, 'folder');
+        sidebar.add_named(snapshotsPane, 'snapshots');
+        const sidebarBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
+        sidebarBox.append(closePaneButton);
+        sidebarBox.append(sidebar);
+        splitView.set_content(controlsBox);
+        splitView.set_sidebar(sidebarBox);
+        updateSidebarWidth();
+        rootGroup.add(splitView);
+        window.add_breakpoint(compact);
     }
 
-    _buildControlsPane(settings, window, onPageChanged = null) {
+    _buildSettingsPanes(settings, window, {showPage, goBack}) {
         const cleanupFns = [];
 
+        const clampContent = child => new Adw.Clamp({
+            maximum_size: 740,
+            tightening_threshold: 560,
+            child,
+        });
         const createContentBox = () => new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
@@ -687,34 +891,24 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const rootBox = createContentBox();
         const gridBox = createContentBox();
         const folderBox = createContentBox();
+        const snapshotControlsBox = createContentBox();
         const snapshotsBox = createContentBox();
-        const advancedBox = createContentBox();
 
         const stack = new Gtk.Stack({
-            transition_type: Gtk.StackTransitionType.SLIDE_LEFT_RIGHT,
             transition_duration: 180,
             hexpand: true,
             vexpand: true,
         });
-        const showPage = (name, back = false) => {
-            stack.transition_type = back
-                ? Gtk.StackTransitionType.SLIDE_RIGHT
-                : Gtk.StackTransitionType.SLIDE_LEFT;
-            stack.set_visible_child_name(name);
-            onPageChanged?.(name);
-        };
-        const addPage = (name, title, content) => {
+        const buildPage = (title, content) => {
             const scroller = new Gtk.ScrolledWindow({
                 hscrollbar_policy: Gtk.PolicyType.NEVER,
                 vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
                 hexpand: true,
                 vexpand: true,
             });
-            scroller.set_child(content);
-            if (!title) {
-                stack.add_named(scroller, name);
-                return;
-            }
+            scroller.set_child(clampContent(content));
+            if (!title)
+                return scroller;
             const page = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
             const header = new Gtk.Box({
                 orientation: Gtk.Orientation.HORIZONTAL,
@@ -724,14 +918,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 margin_start: 10,
                 margin_end: 24,
             });
-            const backButton = new Gtk.Button({
+            const headerButton = new Gtk.Button({
                 icon_name: 'go-previous-symbolic',
                 tooltip_text: _('Back'),
                 valign: Gtk.Align.CENTER,
                 css_classes: ['flat'],
             });
-            backButton.connect('clicked', () => showPage('root', true));
-            header.append(backButton);
+            headerButton.connect('clicked', goBack);
+            header.append(headerButton);
             header.append(new Gtk.Label({
                 label: title,
                 xalign: 0,
@@ -740,7 +934,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             }));
             page.append(header);
             page.append(scroller);
-            stack.add_named(page, name);
+            return page;
         };
 
         const gridGroup = new Adw.PreferencesGroup({
@@ -839,6 +1033,32 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         infoRow.set_child(infoLabel);
         gridGroup.add(infoRow);
         gridBox.append(gridGroup);
+
+        const sortGroup = new Adw.PreferencesGroup({title: _('Application order')});
+        const sortRow = new Adw.ActionRow({title: _('Sort by name…')});
+        const updateSortMode = () => {
+            sortRow.subtitle = sortOrderLabels()[SORT_ORDERS.indexOf(settings.get_string(SORT_ORDER_KEY))];
+        };
+        connectSignal(cleanupFns, settings, `changed::${SORT_ORDER_KEY}`, updateSortMode);
+        updateSortMode();
+        const sortButton = new Gtk.Button({label: _('Sort…'), valign: Gtk.Align.CENTER});
+        sortRow.add_suffix(sortButton);
+        sortRow.activatable_widget = sortButton;
+        sortGroup.add(sortRow);
+        const sortStatus = new Adw.ActionRow({visible: false});
+        const viewBackupButton = new Gtk.Button({
+            label: _('View backup'), valign: Gtk.Align.CENTER,
+        });
+        sortStatus.add_suffix(viewBackupButton);
+        sortGroup.add(sortStatus);
+        const consolidateRow = new Adw.SwitchRow({
+            title: _('Consolidate app pages'),
+            subtitle: _('Fill earlier pages and permanently save the new app order'),
+        });
+        settings.bind('consolidate-pages', consolidateRow, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+        sortGroup.add(consolidateRow);
+        gridBox.append(sortGroup);
 
         const folderGroup = new Adw.PreferencesGroup({
             title: _('Folder grid'),
@@ -983,105 +1203,109 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateFolderInfo();
 
-        const snapshotsGroup = new Adw.PreferencesGroup({
-            title: _('Saved layouts'),
-            description: _('Save layout settings, app order and folder contents'),
-        });
+        const saveSnapshotGroup = new Adw.PreferencesGroup();
         const snapshotNameRow = new Adw.EntryRow({
             title: _('Snapshot name'),
-        });
-        snapshotsGroup.add(snapshotNameRow);
-
-        const saveSnapshotRow = new Adw.ActionRow({
-            title: _('Save current layout'),
-            subtitle: _('Captures the current grid, labels and app arrangement'),
         });
         const saveSnapshotButton = new Gtk.Button({
             label: _('Save'),
             valign: Gtk.Align.CENTER,
             css_classes: ['suggested-action'],
         });
-        saveSnapshotRow.add_suffix(saveSnapshotButton);
-        saveSnapshotRow.activatable_widget = saveSnapshotButton;
-        snapshotsGroup.add(saveSnapshotRow);
-
-        const snapshotsCombo = new Adw.ComboRow({
-            title: _('Saved layouts'),
-        });
-        snapshotsGroup.add(snapshotsCombo);
-
-        const snapshotActionRow = new Adw.ActionRow({
-            title: _('Selected layout'),
-            subtitle: _('Restoring replaces the grid, app order and folders'),
-        });
-        const restoreSnapshotButton = new Gtk.Button({
-            label: _('Restore'),
-            valign: Gtk.Align.CENTER,
-        });
-        const deleteSnapshotButton = new Gtk.Button({
-            label: _('Delete'),
-            valign: Gtk.Align.CENTER,
-            css_classes: ['destructive-action'],
-        });
-        snapshotActionRow.add_suffix(restoreSnapshotButton);
-        snapshotActionRow.add_suffix(deleteSnapshotButton);
-        snapshotsGroup.add(snapshotActionRow);
-
-        const snapshotStatus = new Gtk.Label({
-            label: '',
-            halign: Gtk.Align.START,
-            margin_top: 4,
+        snapshotNameRow.add_suffix(saveSnapshotButton);
+        saveSnapshotGroup.add(snapshotNameRow);
+        snapshotControlsBox.append(saveSnapshotGroup);
+        const saveSnapshotStatus = new Gtk.Label({
             wrap: true,
+            wrap_mode: Pango.WrapMode.WORD_CHAR,
             xalign: 0,
             css_classes: ['dim-label'],
         });
-        const snapshotStatusRow = new Adw.PreferencesRow({
-            activatable: false,
-            selectable: false,
-        });
-        snapshotStatusRow.set_child(snapshotStatus);
-        snapshotsGroup.add(snapshotStatusRow);
-        snapshotsBox.append(snapshotsGroup);
+        snapshotControlsBox.append(saveSnapshotStatus);
 
-        const advancedGroup = new Adw.PreferencesGroup({
-            title: _('Page consolidation'),
-            description: _('Permanently rewrites the saved app order'),
+        const snapshotsList = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.SINGLE,
+            css_classes: ['boxed-list'],
         });
-        const consolidateRow = new Adw.SwitchRow({
-            title: _('Consolidate app pages'),
-            subtitle: _('Fill earlier pages and permanently save the new app order'),
+        snapshotsBox.append(snapshotsList);
+
+        const restoreSnapshotButton = new Gtk.Button({
+            label: _('Restore'),
         });
-        settings.bind('consolidate-pages', consolidateRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
-        advancedGroup.add(consolidateRow);
-        advancedBox.append(advancedGroup);
+        const deleteSnapshotButton = new Gtk.Button({
+            label: _('Delete'),
+            css_classes: ['destructive-action'],
+        });
+        const snapshotStatus = new Gtk.Label({
+            wrap: true,
+            wrap_mode: Pango.WrapMode.WORD_CHAR,
+            xalign: 0,
+            margin_top: 8,
+            margin_bottom: 4,
+            margin_start: 24,
+            margin_end: 24,
+            css_classes: ['dim-label'],
+        });
+        const snapshotActions = new Gtk.ActionBar();
+        snapshotActions.margin_start = snapshotActions.margin_end = 18;
+        snapshotActions.pack_start(deleteSnapshotButton);
+        snapshotActions.pack_end(restoreSnapshotButton);
+        const snapshotFooter = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
+        snapshotFooter.append(new Gtk.Separator());
+        snapshotFooter.append(snapshotStatus);
+        snapshotFooter.append(snapshotActions);
 
         const shellSettings = Gio.Settings.new('org.gnome.shell');
         const folderSettings = Gio.Settings.new(
             'org.gnome.desktop.app-folders');
 
-        const refreshSnapshotRows = selectId => {
+        let snapshots = [];
+        let restorePending = false;
+        const selectedSnapshot = () => snapshots[snapshotsList.get_selected_row()?.get_index()];
+        const updateSnapshotActions = () => {
+            restoreSnapshotButton.sensitive = !restorePending && Boolean(selectedSnapshot());
+            deleteSnapshotButton.sensitive = !restorePending && Boolean(selectedSnapshot());
+        };
+        snapshotsList.connect('row-selected', updateSnapshotActions);
+
+        const refreshSnapshotRows = (selectId = selectedSnapshot()?.id) => {
             snapshots = parseSnapshots(
                 settings.get_string('layout-snapshots'));
-            const model = new Gtk.StringList();
+            for (let row = snapshotsList.get_row_at_index(0); row;
+                row = snapshotsList.get_row_at_index(0))
+                snapshotsList.remove(row);
             for (const snapshot of snapshots) {
-                model.append(formatMessage(_('{name} — {summary}'), {
-                    name: snapshot.name,
-                    summary: snapshotLabel(snapshot, _),
+                const details = new Gtk.Box({
+                    orientation: Gtk.Orientation.VERTICAL,
+                    spacing: 3,
+                    margin_top: 10, margin_bottom: 10,
+                    margin_start: 14, margin_end: 14,
+                });
+                const date = GLib.DateTime.new_from_iso8601(snapshot.created, GLib.TimeZone.new_utc());
+                const summary = snapshotLabel(snapshot, _);
+                const metadata = date ? `${date.to_local().format('%x %X')} · ${summary}` : summary;
+                details.append(new Gtk.Label({
+                    label: snapshot.name,
+                    wrap: true,
+                    wrap_mode: Pango.WrapMode.WORD_CHAR,
+                    xalign: 0,
                 }));
+                details.append(new Gtk.Label({
+                    label: metadata,
+                    wrap: true,
+                    wrap_mode: Pango.WrapMode.WORD_CHAR,
+                    xalign: 0,
+                    css_classes: ['dim-label', 'caption'],
+                }));
+                snapshotsList.append(new Gtk.ListBoxRow({child: details}));
             }
-            snapshotsCombo.model = model;
-            const index = selectId
-                ? snapshots.findIndex(snapshot => snapshot.id === selectId)
-                : 0;
-            snapshotsCombo.selected = snapshots.length
-                ? Math.max(0, index)
-                : Gtk.INVALID_LIST_POSITION;
-            const hasSnapshots = snapshots.length > 0;
-            snapshotsCombo.sensitive = hasSnapshots;
-            restoreSnapshotButton.sensitive = hasSnapshots;
-            deleteSnapshotButton.sensitive = hasSnapshots;
-            snapshotStatus.label = hasSnapshots
+            const index = snapshots.findIndex(snapshot => snapshot.id === selectId);
+            const selectedRow = snapshotsList.get_row_at_index(Math.max(0, index));
+            if (selectedRow)
+                snapshotsList.select_row(selectedRow);
+            snapshotsList.visible = snapshots.length > 0;
+            updateSnapshotActions();
+            snapshotStatus.label = snapshots.length
                 ? formatMessage(_('Saved layouts: {count}'), {
                     count: snapshots.length,
                 })
@@ -1091,15 +1315,35 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             });
         };
 
-        let snapshots = [];
         refreshSnapshotRows();
         connectSignal(cleanupFns, settings, 'changed::layout-snapshots', () => {
             refreshSnapshotRows();
         });
 
+        const sortCancellable = new Gio.Cancellable();
+        cleanupFns.push(() => sortCancellable.cancel());
+        let sortBackupId = '';
+        sortButton.connect('clicked', () => {
+            showGridSortDialog(window, settings, sortCancellable, (status, snapshotId) => {
+                sortBackupId = snapshotId;
+                sortStatus.title = {
+                    manual: _('Manual order'),
+                    sorted: _('App grid sorted'),
+                    unchanged: _('The app grid is already in this order'),
+                    'sort-failed': _('Could not sort the app grid.'),
+                }[status];
+                sortStatus.visible = true;
+                viewBackupButton.visible = Boolean(sortBackupId);
+            }, () => showPage('snapshots', true));
+        });
+        viewBackupButton.connect('clicked', () => {
+            refreshSnapshotRows(sortBackupId);
+            showPage('snapshots', true);
+        });
+
         saveSnapshotButton.connect('clicked', () => {
             if (snapshots.length >= MAX_SNAPSHOTS) {
-                snapshotStatus.label = formatMessage(
+                saveSnapshotStatus.label = formatMessage(
                     _('Limit reached ({max}); delete a snapshot first'), {
                         max: MAX_SNAPSHOTS,
                     });
@@ -1130,39 +1374,40 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                         pages: Array.isArray(pages) ? pages.length : 0,
                     },
                 });
-                snapshots = addSnapshot(snapshots, snapshot);
                 settings.set_string('layout-snapshots',
-                    serializeSnapshots(snapshots));
+                    serializeSnapshots(addSnapshot(snapshots, snapshot)));
                 refreshSnapshotRows(snapshot.id);
-                snapshotStatus.label = formatMessage(
+                saveSnapshotStatus.label = formatMessage(
                     _('Saved “{name}”'), {name});
             } catch (error) {
-                snapshotStatus.label = formatMessage(
+                saveSnapshotStatus.label = formatMessage(
                     _('Could not save: {error}'), {error: error.message});
             }
         });
 
         deleteSnapshotButton.connect('clicked', () => {
-            const snapshot = snapshots[snapshotsCombo.selected];
+            const snapshot = selectedSnapshot();
             if (!snapshot)
                 return;
-            snapshots = removeSnapshot(snapshots, snapshot.id);
             settings.set_string('layout-snapshots',
-                serializeSnapshots(snapshots));
+                serializeSnapshots(removeSnapshot(snapshots, snapshot.id)));
             refreshSnapshotRows();
             snapshotStatus.label = formatMessage(
                 _('Deleted “{name}”'), {name: snapshot.name});
         });
 
         restoreSnapshotButton.connect('clicked', () => {
-            const snapshot = snapshots[snapshotsCombo.selected];
-            if (!snapshot)
+            const snapshot = selectedSnapshot();
+            if (!snapshot || restorePending)
                 return;
+            let detail = _('This replaces the current layout settings, app order and folder contents.');
+            if (settings.get_string(SORT_ORDER_KEY) !== 'manual')
+                detail += '\n\n' + _('Restoring automatically switches to manual order and turns off automatic sorting.');
             const dialog = new Gtk.AlertDialog({
                 message: formatMessage(_('Restore “{name}”?'), {
                     name: snapshot.name,
                 }),
-                detail: _('This replaces the current layout settings, app order and folder contents.'),
+                detail,
                 buttons: [_('Cancel'), _('Restore')],
                 cancel_button: 0,
                 default_button: 0,
@@ -1176,24 +1421,44 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 }
                 if (response !== 1)
                     return;
-                try {
-                    restoreSnapshot({
-                        settings,
-                        shellSettings,
-                        folderSettings,
-                        folderSettingsFor: id =>
-                            folderSettingsFor(folderSettings, id),
-                        snapshot,
-                        applyStoredValue,
+                restorePending = true;
+                updateSnapshotActions();
+                const finish = error => {
+                    restorePending = false;
+                    updateSnapshotActions();
+                    snapshotStatus.label = error
+                        ? formatMessage(_('Could not restore: {error}'), {error})
+                        : formatMessage(_('Restored “{name}”'), {name: snapshot.name});
+                };
+                const disabled = shellSettings.get_boolean('disable-user-extensions') ||
+                    shellSettings.get_strv('disabled-extensions').includes(this.metadata.uuid) ||
+                    !shellSettings.get_strv('enabled-extensions').includes(this.metadata.uuid);
+                Gio.DBus.session.call('org.gnome.Shell', SORT_PATH, SORT_INTERFACE,
+                    'RestoreLayout', new GLib.Variant('(s)', [snapshot.id]),
+                    new GLib.VariantType('(b)'), Gio.DBusCallFlags.NONE, 10000,
+                    sortCancellable, (connection, callResult) => {
+                        if (sortCancellable.is_cancelled())
+                            return;
+                        try {
+                            const [restored] = connection.call_finish(callResult).deepUnpack();
+                            finish(restored ? '' : _('GNOME Shell could not apply the saved layout.'));
+                        } catch (error) {
+                            if (!disabled || !error.matches(Gio.DBusError, Gio.DBusError.UNKNOWN_METHOD)) {
+                                finish(_('GNOME Shell could not apply the saved layout.'));
+                                return;
+                            }
+                            try {
+                                restoreSnapshot({
+                                    settings, shellSettings, folderSettings, snapshot,
+                                    folderSettingsFor: id => folderSettingsFor(folderSettings, id),
+                                    applyStoredValue,
+                                });
+                                finish('');
+                            } catch (restoreError) {
+                                finish(restoreError.message);
+                            }
+                        }
                     });
-                    snapshotStatus.label = formatMessage(
-                        _('Restored “{name}”'), {name: snapshot.name});
-                } catch (error) {
-                    snapshotStatus.label = formatMessage(
-                        _('Could not restore: {error}'), {
-                            error: error.message,
-                        });
-                }
             });
         });
 
@@ -1235,21 +1500,21 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateInfo();
 
-        const addNavRow = (group, title, page) => {
+        const addNavRow = (group, title, activate) => {
             const row = new Adw.ActionRow({title, activatable: true});
             row.add_suffix(new Gtk.Image({
                 icon_name: 'go-next-symbolic',
                 valign: Gtk.Align.CENTER,
                 css_classes: ['dim-label'],
             }));
-            row.connect('activated', () => showPage(page));
+            row.connect('activated', activate);
             group.add(row);
             return row;
         };
 
         const layoutGroup = new Adw.PreferencesGroup({title: _('Layout')});
-        const appGridRow = addNavRow(layoutGroup, _('App grid'), 'grid');
-        const folderRow = addNavRow(layoutGroup, _('Folder dialog'), 'folder');
+        const appGridRow = addNavRow(layoutGroup, _('App grid'), () => showPage('grid'));
+        const folderRow = addNavRow(layoutGroup, _('Folder dialog'), () => showPage('folder'));
 
         const optionsGroup = new Adw.PreferencesGroup({title: _('Options')});
         const namesRow = new Adw.SwitchRow({
@@ -1259,9 +1524,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         settings.bind('show-app-names', namesRow, 'active',
             Gio.SettingsBindFlags.DEFAULT);
         optionsGroup.add(namesRow);
-        const snapshotsRow = addNavRow(optionsGroup,
-            _('Layout snapshots'), 'snapshots');
-        const advancedRow = addNavRow(optionsGroup, _('Advanced'), 'advanced');
+        const snapshotsRow = addNavRow(optionsGroup, _('Layout snapshots'), () => showPage('snapshots'));
         rootBox.append(layoutGroup);
         rootBox.append(optionsGroup);
 
@@ -1295,7 +1558,6 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             snapshotsRow.subtitle = saved
                 ? formatMessage(_('{count} saved'), {count: saved})
                 : _('No saved layouts');
-            advancedRow.subtitle = _('Page consolidation rewrites the app order');
         };
         for (const key of [
             'use-presets', 'preset-level', 'custom-icon-size',
@@ -1309,25 +1571,21 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         updateRootRows();
 
-        addPage('root', null, rootBox);
-        addPage('grid', _('App grid'), gridBox);
-        addPage('folder', _('Folder dialog'), folderBox);
-        addPage('snapshots', _('Layout snapshots'), snapshotsBox);
-        addPage('advanced', _('Advanced'), advancedBox);
+        stack.add_named(buildPage(null, rootBox), 'root');
+        stack.add_named(buildPage(_('App grid'), gridBox), 'grid');
+        stack.add_named(buildPage(_('Folder dialog'), folderBox), 'folder');
+        stack.add_named(buildPage(_('Layout snapshots'), snapshotControlsBox), 'snapshots');
         stack.set_visible_child_name('root');
 
-        return {widget: stack, cleanupFns};
+        const snapshotsPane = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
+        snapshotsPane.append(buildPage(null, snapshotsBox));
+        snapshotsPane.append(clampContent(snapshotFooter));
+        return {controls: stack, snapshotsPane, cleanupFns};
     }
 
     _buildPreviewPane(settings, window) {
         const cleanupFns = [];
 
-        const previewRoot = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 4,
-            margin_top: 16, margin_bottom: 16,
-            margin_start: 24, margin_end: 24,
-        });
         const overviewPage = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 4,
@@ -1350,8 +1608,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         previewFrame.add_css_class('appgrid-fit-wallpaper-preview');
 
         const da = new Gtk.DrawingArea();
-        da.set_content_width(560);
-        da.set_content_height(315);
+        da.set_content_height(200);
         da.set_hexpand(true);
         da.set_vexpand(true);
         previewFrame.append(da);
@@ -1408,8 +1665,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         folderFrame.add_css_class('appgrid-fit-wallpaper-preview');
 
         const folderDa = new Gtk.DrawingArea();
-        folderDa.set_content_width(560);
-        folderDa.set_content_height(315);
+        folderDa.set_content_height(200);
         folderDa.set_hexpand(true);
         folderDa.set_vexpand(true);
         folderDa.set_draw_func((_area, cr, drawW, drawH) => {
@@ -1458,20 +1714,6 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         folderPage.append(folderClamp);
         folderPage.append(folderCaption);
 
-        const previewStack = new Gtk.Stack({
-            transition_type: Gtk.StackTransitionType.CROSSFADE,
-            transition_duration: 160,
-            hexpand: true,
-            vexpand: true,
-        });
-        previewStack.add_named(overviewPage, 'overview');
-        previewStack.add_named(folderPage, 'folder');
-        previewRoot.append(previewStack);
-
-        const setPage = page => {
-            previewStack.set_visible_child_name(
-                page === 'folder' ? 'folder' : 'overview');
-        };
 
         const updateFolderPreview = () => {
             const config = readGridConfig(settings);
@@ -1819,14 +2061,21 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             cr.setDash([], 0);
         });
 
-        const previewScroller = new Gtk.ScrolledWindow({
-            hscrollbar_policy: Gtk.PolicyType.NEVER,
-            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
-            min_content_height: 420,
-            vexpand: true,
-        });
-        previewScroller.set_child(previewRoot);
-
-        return {widget: previewScroller, cleanupFns, setPage};
+        const makePreviewScroller = child => {
+            const scroller = new Gtk.ScrolledWindow({
+                hscrollbar_policy: Gtk.PolicyType.NEVER,
+                vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+                vexpand: true,
+            });
+            child.margin_top = child.margin_bottom = 16;
+            child.margin_start = child.margin_end = 24;
+            scroller.set_child(child);
+            return scroller;
+        };
+        return {
+            overview: makePreviewScroller(overviewPage),
+            folder: makePreviewScroller(folderPage),
+            cleanupFns,
+        };
     }
 }

@@ -1,4 +1,4 @@
-import { SNAPSHOT_SETTINGS_KEYS } from './config.js'
+import {FOLDER_POSITION_KEY, SNAPSHOT_SETTINGS_KEYS, SORT_ORDER_KEY} from './config.js'
 import { SNAPSHOT_VERSION } from './snapshots.js'
 
 export function storedValue(settings, key) {
@@ -29,11 +29,11 @@ export function captureSnapshot({
     folderSettingsFor,
     name,
     summary,
+    picker = shellSettings.get_value('app-picker-layout'),
     settingsKeys = SNAPSHOT_SETTINGS_KEYS,
     now = Date.now(),
     random = Math.random(),
 }) {
-    const picker = shellSettings.get_value('app-picker-layout')
     return {
         version: SNAPSHOT_VERSION,
         id: `${now}-${random.toString(36).slice(2, 8)}`,
@@ -68,8 +68,13 @@ export function restoreSnapshot({
         snapshot.folders.children)
     applyStoredValue(shellSettings, 'app-picker-layout',
         snapshot.appPicker)
+    const restoredSettings = {
+        [FOLDER_POSITION_KEY]: {type: 's', value: "'mixed'"},
+        ...snapshot.settings,
+        [SORT_ORDER_KEY]: {type: 's', value: "'manual'"},
+    }
     for (const key of settingsKeys) {
-        const stored = snapshot.settings[key]
+        const stored = restoredSettings[key]
         if (stored)
             applyStoredValue(settings, key, stored)
     }

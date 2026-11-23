@@ -678,7 +678,7 @@ import zipfile
 from pathlib import Path
 root, output = map(Path, sys.argv[1:])
 required = ['metadata.json', 'extension.js', 'prefs.js', 'config.js',
-            'gridPages.js', 'gridLayout.js', 'snapshots.js', 'snapshotStore.js',
+            'gridPages.js', 'gridSort.js', 'gridLayout.js', 'snapshots.js', 'snapshotStore.js',
             'LICENSE']
 schema = root / 'schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml'
 missing = [name for name in required if not (root / name).is_file()]

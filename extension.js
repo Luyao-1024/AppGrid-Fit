@@ -1,4 +1,5 @@
 import Clutter from 'gi://Clutter'
+import Gio from 'gi://Gio'
 import GLib from 'gi://GLib'
 import St from 'gi://St'
 import * as Main from 'resource:///org/gnome/shell/ui/main.js'
@@ -7,10 +8,12 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js'
 import {
     FOLDER_DIALOG_PAGE_PADDING,
     FOLDER_EDGE_PADDING_MAX,
+    FOLDER_POSITION_KEY,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    SORT_ORDER_KEY,
     UNCONSTRAINED_SPACING,
     computeGridFit,
     computePreviewTileSize,
@@ -19,9 +22,13 @@ import {
 } from './config.js'
 import {
     reflowPages,
+    replaceGridPages,
     restorePersistedPageOrder,
     syncPageManagerPages,
 } from './gridPages.js'
+import {
+    FOLDER_POSITIONS, SORT_PATH, SORT_XML, restoreGridPages, sameGridPages, sortGridPages,
+} from './gridSort.js'
 import {
     applyAppNameVisibility,
     applyFolderDialogSize,
@@ -37,6 +44,8 @@ import {
     saveGridLayout,
     setGridDimensions,
 } from './gridLayout.js'
+import {captureSnapshot, restoreSnapshot} from './snapshotStore.js'
+import {MAX_SNAPSHOTS, addSnapshot, parseSnapshots, serializeSnapshots} from './snapshots.js'
 
 const ENFORCED_PROPERTIES = [
     'row-spacing', 'column-spacing',
@@ -45,6 +54,21 @@ const ENFORCED_PROPERTIES = [
 ]
 
 const SETTLE_PUBLISH_DELAY_MS = 600
+const PICKER_KEY = 'app-picker-layout'
+
+function packPickerPages(pages) {
+    return new GLib.Variant('aa{sv}', pages.map(page => Object.fromEntries(
+        page.map((item, index) => [item.id, new GLib.Variant('a{sv}', {
+            position: GLib.Variant.new_int32(index),
+        })]))))
+}
+
+function folderSettingsFor(folderSettings, id) {
+    return new Gio.Settings({
+        schema_id: 'org.gnome.desktop.app-folders.folder',
+        path: `${folderSettings.path}folders/${id}/`,
+    })
+}
 
 function createFolderPagePadding(padding = FOLDER_DIALOG_PAGE_PADDING) {
     const value = Math.max(0, Math.min(FOLDER_EDGE_PADDING_MAX,
@@ -85,9 +109,16 @@ export default class AppGridSizeExtension extends Extension {
         this._monitorsChangedId = Main.layoutManager.connect(
             'monitors-changed', () => this._onMonitorsChanged())
         this._apply()
+        this._sortObject = Gio.DBusExportedObject.wrapJSObject(SORT_XML, {
+            SortGrid: (...args) => this._sortGrid(...args),
+            RestoreLayout: id => this._restoreSavedLayout(id),
+        })
+        this._sortObject.export(Gio.DBus.session, SORT_PATH)
     }
 
     disable() {
+        this._sortObject?.unexport()
+        this._disconnectAppDisplay()
         this._cancelScheduledApply()
         this._cancelFolderDialogSize()
         this._disconnectOverview()
@@ -101,6 +132,11 @@ export default class AppGridSizeExtension extends Extension {
 
     _resetState() {
         this._settings = null
+        this._sortObject = null
+        this._sortDisplay = null
+        this._sortDisplayId = 0
+        this._sortAppIds = null
+        this._restoringSnapshot = false
         this._original = null
         this._originalFolders = new Map()
         this._originalFolderDialogs = new WeakMap()
@@ -137,6 +173,11 @@ export default class AppGridSizeExtension extends Extension {
             this._sigIds.push(this._settings.connect(
                 `changed::${key}`, () => this._scheduleApply()))
         }
+        this._sigIds.push(this._settings.connect(`changed::${SORT_ORDER_KEY}`, () => {
+            if (this._settings.get_string(SORT_ORDER_KEY) === 'manual')
+                this._sortAppIds = null
+            this._scheduleApply()
+        }))
     }
 
     _connectTheme() {
@@ -286,6 +327,242 @@ export default class AppGridSizeExtension extends Extension {
 
     _getAppDisplay() {
         return this._getControlsManager()?.appDisplay ?? null
+    }
+
+    _connectAppDisplay(appDisplay) {
+        if (this._sortDisplay === appDisplay)
+            return
+        this._disconnectAppDisplay()
+        this._sortDisplay = appDisplay
+        this._sortDisplayId = appDisplay.connect('view-loaded', () => {
+            if (!this._restoringSnapshot && this._settings.get_string(SORT_ORDER_KEY) !== 'manual')
+                this._scheduleApply()
+        })
+    }
+
+    _disconnectAppDisplay() {
+        if (this._sortDisplayId)
+            this._sortDisplay.disconnect(this._sortDisplayId)
+        this._sortDisplay = null
+        this._sortDisplayId = 0
+        this._sortAppIds = null
+    }
+
+    _readSortableGrid() {
+        const appDisplay = this._getAppDisplay()
+        const lm = appDisplay?._grid?.layout_manager
+        if (!this._applied || appDisplay?._dragMonitor ||
+            !Array.isArray(appDisplay?._orderedItems) ||
+            !Array.isArray(lm?._pages) ||
+            typeof lm._removeItemData !== 'function' ||
+            typeof lm._addItemToPage !== 'function' ||
+            typeof appDisplay._savePages !== 'function')
+            return null
+
+        const originalPages = lm._pages.map(page => [...page.children])
+        const visiblePages = originalPages.map(page => page.filter(item => item.visible))
+        const rows = lm.rows_per_page
+        const columns = lm.columns_per_page
+        if (rows < 1 || columns < 1 ||
+            visiblePages.some((page, index) => (!page.length && originalPages[index].length) ||
+                page.some(item => !item.id)))
+            return null
+        return {appDisplay, lm, originalPages, visiblePages: visiblePages.filter(page => page.length), rows, columns}
+    }
+
+    _replaceVisiblePages({appDisplay, lm, originalPages}, pages) {
+        const next = pages.map(page => [...page])
+        originalPages.forEach((page, index) => {
+            const target = next[Math.min(index, next.length - 1)]
+            target?.push(...page.filter(item => !item.visible))
+        })
+        replaceGridPages(appDisplay, lm, next)
+    }
+
+    _sortNewApps() {
+        const order = this._settings.get_string(SORT_ORDER_KEY)
+        if (order === 'manual' || this._restoringSnapshot)
+            return
+        const grid = this._readSortableGrid()
+        if (!grid)
+            return
+        const ids = grid.visiblePages.flat().map(item => item.id)
+        if (ids.length === this._sortAppIds?.size && ids.every(id => this._sortAppIds.has(id)))
+            return
+        this._sortGrid(order === 'descending', this._settings.get_string(FOLDER_POSITION_KEY), '')
+    }
+
+    _sortGrid(descending, folderPosition, backupName) {
+        const grid = this._readSortableGrid()
+        if (!grid || !FOLDER_POSITIONS.includes(folderPosition) ||
+            !global.settings.is_writable(PICKER_KEY) ||
+            !this._settings.is_writable(SORT_ORDER_KEY) ||
+            !this._settings.is_writable(FOLDER_POSITION_KEY))
+            return ['unavailable', '']
+        const {appDisplay, lm, originalPages, visiblePages, rows, columns} = grid
+        const order = descending ? 'descending' : 'ascending'
+        const sortedPages = sortGridPages(visiblePages, rows * columns, {
+            descending, folderPosition, folders: new Set(appDisplay._folderIcons),
+        })
+        const pagesChanged = !sameGridPages(visiblePages, sortedPages)
+        const modeChanged = this._settings.get_string(SORT_ORDER_KEY) !== order ||
+            this._settings.get_string(FOLDER_POSITION_KEY) !== folderPosition
+
+        let snapshotId = ''
+        if (backupName && (pagesChanged || modeChanged)) {
+            const snapshots = parseSnapshots(this._settings.get_string('layout-snapshots'))
+            if (snapshots.length >= MAX_SNAPSHOTS)
+                return ['full', '']
+            try {
+                const folderSettings = Gio.Settings.new('org.gnome.desktop.app-folders')
+                const {iconSize, showNames} = this._activeConfig
+                const snapshot = captureSnapshot({
+                    settings: this._settings,
+                    picker: packPickerPages(visiblePages),
+                    folderSettings,
+                    folderSettingsFor: id => folderSettingsFor(folderSettings, id),
+                    name: backupName,
+                    summary: {
+                        iconSize, rows, columns, showNames, pages: visiblePages.length,
+                        folderRows: this._settings.get_int('folder-rows'),
+                        folderColumns: this._settings.get_int('folder-columns'),
+                    },
+                })
+                if (!this._settings.set_string('layout-snapshots',
+                    serializeSnapshots(addSnapshot(snapshots, snapshot))))
+                    return ['backup-failed', '']
+                snapshotId = snapshot.id
+            } catch (error) {
+                logError(error, '[appgrid-size] failed to back up the app grid')
+                return ['backup-failed', '']
+            }
+        }
+
+        const previousPicker = global.settings.get_value(PICKER_KEY)
+        const previousPosition = this._settings.get_string(FOLDER_POSITION_KEY)
+        try {
+            if (pagesChanged) {
+                const expectedPicker = packPickerPages(sortedPages)
+                this._replaceVisiblePages(grid, sortedPages)
+                appDisplay._savePages()
+                if (!global.settings.get_value(PICKER_KEY).equal(expectedPicker))
+                    throw new Error('Shell did not save the sorted app pages')
+            }
+            if (modeChanged && (!this._settings.set_string(FOLDER_POSITION_KEY, folderPosition) ||
+                !this._settings.set_string(SORT_ORDER_KEY, order)))
+                throw new Error('Could not save the sorting options')
+        } catch (error) {
+            logError(error, '[appgrid-size] failed to sort the app grid')
+            try {
+                if (modeChanged)
+                    this._settings.set_string(FOLDER_POSITION_KEY, previousPosition)
+                if (!global.settings.get_value(PICKER_KEY).equal(previousPicker))
+                    global.settings.set_value(PICKER_KEY, previousPicker)
+                if (pagesChanged) {
+                    replaceGridPages(appDisplay, lm, originalPages)
+                    syncPageManagerPages(appDisplay, lm)
+                }
+            } catch (restoreError) {
+                logError(restoreError, '[appgrid-size] failed to roll back the app grid')
+            }
+            return ['sort-failed', snapshotId]
+        }
+        this._sortAppIds = new Set(visiblePages.flat().map(item => item.id))
+        if (pagesChanged)
+            this._publishPreviewLayout(appDisplay._grid)
+        return [pagesChanged || modeChanged ? 'sorted' : 'unchanged', snapshotId]
+    }
+
+    _restoreSavedLayout(id) {
+        const snapshot = parseSnapshots(this._settings.get_string('layout-snapshots'))
+            .find(item => item.id === id)
+        const originalGrid = this._readSortableGrid()
+        if (!snapshot || !originalGrid || !global.settings.is_writable(PICKER_KEY))
+            return false
+
+        const originalPicker = global.settings.get_value(PICKER_KEY)
+        const originalLivePicker = packPickerPages(originalGrid.visiblePages)
+        const writes = []
+        const applied = []
+        let rebuilding = false
+        const stageWrite = (settings, key, value) => {
+            const schema = settings.settings_schema
+            if (!schema.has_key(key))
+                throw new Error(`Unknown snapshot setting ${key}`)
+            const schemaKey = schema.get_key(key)
+            const before = settings.get_value(key)
+            if (!schemaKey.get_value_type().equal(value.get_type()) ||
+                !schemaKey.range_check(value) ||
+                (!before.equal(value) && !settings.is_writable(key)))
+                throw new Error(`Cannot restore ${key}`)
+            writes.push({settings, key, before, value})
+        }
+
+        this._restoringSnapshot = true
+        try {
+            const picker = GLib.Variant.parse(new GLib.VariantType('aa{sv}'),
+                snapshot.appPicker.value, null, null)
+            const folderSettings = Gio.Settings.new('org.gnome.desktop.app-folders')
+            restoreSnapshot({
+                settings: this._settings,
+                shellSettings: global.settings,
+                folderSettings: {
+                    set_strv: (key, children) => stageWrite(folderSettings, key,
+                        new GLib.Variant('as', children)),
+                },
+                folderSettingsFor: folderId => folderSettingsFor(folderSettings, folderId),
+                snapshot,
+                applyStoredValue: (settings, key, stored) => {
+                    const value = settings === global.settings && key === PICKER_KEY
+                        ? picker
+                        : GLib.Variant.parse(new GLib.VariantType(stored.type), stored.value, null, null)
+                    stageWrite(settings, key, value)
+                },
+            })
+            for (const write of writes) {
+                const {settings, key, value} = write
+                if (settings.get_value(key).equal(value))
+                    continue
+                if (!settings.set_value(key, value))
+                    throw new Error(`Could not restore ${key}`)
+                applied.push(write)
+            }
+            rebuilding = true
+            this._rebuildSavedLayout(picker, picker)
+            return true
+        } catch (error) {
+            logError(error, '[appgrid-size] failed to restore the app grid')
+            try {
+                for (const {settings, key, before} of applied.reverse()) {
+                    if (settings !== global.settings || key !== PICKER_KEY)
+                        settings.set_value(key, before)
+                }
+                if (applied.length || rebuilding)
+                    this._rebuildSavedLayout(originalLivePicker, originalPicker)
+            } catch (restoreError) {
+                logError(restoreError, '[appgrid-size] failed to roll back the restored app grid')
+            }
+            return false
+        } finally {
+            this._restoringSnapshot = false
+        }
+    }
+
+    _rebuildSavedLayout(picker, persistedPicker) {
+        this._cancelScheduledApply()
+        this._apply()
+        if (!global.settings.get_value(PICKER_KEY).equal(persistedPicker) &&
+            !global.settings.set_value(PICKER_KEY, persistedPicker))
+            throw new Error('Could not persist the restored app grid')
+        const grid = this._readSortableGrid()
+        if (!grid)
+            throw new Error('App grid is unavailable')
+        const pages = restoreGridPages(picker.recursiveUnpack(), grid.visiblePages,
+            grid.rows * grid.columns)
+        if (!sameGridPages(grid.visiblePages, pages))
+            this._replaceVisiblePages(grid, pages)
+        this._sortAppIds = new Set(pages.flat().map(item => item.id))
+        this._publishPreviewLayout(grid.appDisplay._grid)
     }
 
     _getAllocationSize(grid) {
@@ -917,18 +1194,23 @@ export default class AppGridSizeExtension extends Extension {
             this._connectFolderSignals()
             this._setupEnforcers(lm)
 
-            if (this._restoredOrderLayoutManager !== lm &&
-                restorePersistedPageOrder(this._getAppDisplay(), lm))
-                this._restoredOrderLayoutManager = lm
+            const appDisplay = this._getAppDisplay()
+            this._connectAppDisplay(appDisplay)
+            if (!this._restoringSnapshot) {
+                if (this._restoredOrderLayoutManager !== lm &&
+                    restorePersistedPageOrder(appDisplay, lm))
+                    this._restoredOrderLayoutManager = lm
 
-            const pagesChanged = reflowPages(lm, {
-                consolidate,
-                warn: message => console.warn(`[appgrid-size] ${message}`),
-            })
-            if (pagesChanged)
-                syncPageManagerPages(this._getAppDisplay(), lm)
-            if (consolidate && pagesChanged)
-                this._savePages()
+                const pagesChanged = reflowPages(lm, {
+                    consolidate,
+                    warn: message => console.warn(`[appgrid-size] ${message}`),
+                })
+                if (pagesChanged)
+                    syncPageManagerPages(appDisplay, lm)
+                if (consolidate && pagesChanged)
+                    this._savePages()
+                this._sortNewApps()
+            }
 
             this._forceRelayout(grid)
             this._publishPreviewLayout(grid)

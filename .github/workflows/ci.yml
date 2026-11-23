@@ -64,6 +64,7 @@ jobs:
             --gettext-domain=appgrid-size@luyao \
             --extra-source=config.js \
             --extra-source=gridPages.js \
+            --extra-source=gridSort.js \
             --extra-source=gridLayout.js \
             --extra-source=snapshots.js \
             --extra-source=snapshotStore.js \
