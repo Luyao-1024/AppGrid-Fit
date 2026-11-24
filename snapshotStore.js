@@ -1,4 +1,7 @@
-import {FOLDER_POSITION_KEY, SNAPSHOT_SETTINGS_KEYS, SORT_ORDER_KEY} from './config.js'
+import {
+    FOLDER_POSITION_KEY, NON_LATIN_POSITION_KEY, SNAPSHOT_SETTINGS_KEYS, SORT_FOLDER_APPS_KEY,
+    SORT_ORDER_KEY,
+} from './config.js'
 import { SNAPSHOT_VERSION } from './snapshots.js'
 
 export function storedValue(settings, key) {
@@ -70,6 +73,8 @@ export function restoreSnapshot({
         snapshot.appPicker)
     const restoredSettings = {
         [FOLDER_POSITION_KEY]: {type: 's', value: "'mixed'"},
+        [NON_LATIN_POSITION_KEY]: {type: 's', value: "'mixed'"},
+        [SORT_FOLDER_APPS_KEY]: {type: 'b', value: 'false'},
         ...snapshot.settings,
         [SORT_ORDER_KEY]: {type: 's', value: "'manual'"},
     }

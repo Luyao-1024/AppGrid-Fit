@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.3.6 — 2026-11-24
 
-- The right preferences pane follows the left navigation and fades when its content changes. Layout snapshots show the save controls on the left and the scrollable list on the right. Page consolidation is now under App grid → Application order.
+- Added a preferences language selector with immediate switching between the system language, English, and Simplified Chinese.
+- Moved page consolidation to Application sorting. Sorting by name always fills earlier pages and preserves the separate manual-mode preference.
+- Matched the left, right, and bottom margins of the preferences card. The View backup button remains available after sorting when a backup was saved.
+- Added front, back, and mixed placement for names beginning with a non-Latin letter, including when sorting inside folders.
+- Moved Application sorting to the home menu and added optional sorting inside folders. Folder dialogs use the selected direction while the option is enabled and fall back to their saved order when it is off.
+- The right preferences pane follows the left navigation and fades when its content changes. Layout snapshots show the save controls on the left and the scrollable list on the right.
 - Added opt-in app-grid sorting by display name, with ascending and descending order, three folder positions, and automatic placement of new apps. Restoring a layout snapshot reapplies the saved icon order and switches to manual order. The confirmation dialog explains the switch when automatic sorting is active.
 
 ## 1.3.5 — 2026-10-27

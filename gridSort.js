@@ -8,20 +8,55 @@ export const SORT_XML = `<node><interface name="${SORT_INTERFACE}">
         <arg type="s" name="status" direction="out"/>
         <arg type="s" name="snapshotId" direction="out"/>
     </method>
+    <method name="SortGridWithFolders">
+        <arg type="b" name="descending" direction="in"/>
+        <arg type="s" name="folderPosition" direction="in"/>
+        <arg type="s" name="backupName" direction="in"/>
+        <arg type="b" name="sortFolders" direction="in"/>
+        <arg type="s" name="status" direction="out"/>
+        <arg type="s" name="snapshotId" direction="out"/>
+    </method>
+    <method name="SortGridWithOptions">
+        <arg type="b" name="descending" direction="in"/>
+        <arg type="s" name="folderPosition" direction="in"/>
+        <arg type="s" name="backupName" direction="in"/>
+        <arg type="b" name="sortFolders" direction="in"/>
+        <arg type="s" name="nonLatinPosition" direction="in"/>
+        <arg type="s" name="status" direction="out"/>
+        <arg type="s" name="snapshotId" direction="out"/>
+    </method>
     <method name="RestoreLayout">
         <arg type="s" name="snapshotId" direction="in"/>
         <arg type="b" name="restored" direction="out"/>
     </method>
 </interface></node>`
 
-export const FOLDER_POSITIONS = ['mixed', 'first', 'last']
+export const SORT_POSITIONS = ['mixed', 'first', 'last']
 export const SORT_ORDERS = ['manual', 'ascending', 'descending']
 
+function startsWithNonLatinLetter(name) {
+    const firstLetter = name.match(/\p{Letter}/u)?.[0]
+    return firstLetter !== undefined && !/\p{Script=Latin}/u.test(firstLetter)
+}
+
+export function compareAppNames(left, right, descending, collator, nonLatinPosition = 'mixed') {
+    const leftName = left.name ?? left.id
+    const rightName = right.name ?? right.id
+    if (nonLatinPosition !== 'mixed') {
+        const groupOrder = Number(startsWithNonLatinLetter(leftName)) -
+            Number(startsWithNonLatinLetter(rightName))
+        if (groupOrder)
+            return nonLatinPosition === 'first' ? -groupOrder : groupOrder
+    }
+    const order = collator.compare(leftName, rightName)
+    return descending ? -order : order
+}
+
 export function sortGridPages(pages, capacity, {
-    descending, folderPosition, folders, collator = new Intl.Collator(),
+    descending, folderPosition, folders, nonLatinPosition = 'mixed', collator = new Intl.Collator(),
 }) {
     if (!Number.isSafeInteger(capacity) || capacity < 1 ||
-        !FOLDER_POSITIONS.includes(folderPosition))
+        !SORT_POSITIONS.includes(folderPosition) || !SORT_POSITIONS.includes(nonLatinPosition))
         throw new RangeError('Invalid app grid sort options')
 
     const sorted = pages.flat().sort((left, right) => {
@@ -31,8 +66,7 @@ export function sortGridPages(pages, capacity, {
             if (folderOrder)
                 return folderPosition === 'first' ? -folderOrder : folderOrder
         }
-        const order = collator.compare(left.name ?? left.id, right.name ?? right.id)
-        return descending ? -order : order
+        return compareAppNames(left, right, descending, collator, nonLatinPosition)
     })
     return paginate(sorted, capacity)
 }

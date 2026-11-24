@@ -2,7 +2,7 @@
 
 A GNOME Shell extension (46–51) that lets you customize the App Grid layout — icon size, rows/columns per page, and spacing — so you can fit more apps on each page.
 
-Current version: **1.3.5**
+Current version: **1.3.6**
 
 ## Features
 
@@ -97,18 +97,26 @@ Open the extension preferences via:
 - **Extensions** app → AppGrid Fit → Settings
 - Or run: `gnome-extensions prefs appgrid-size@luyao`
 
-**Manual order** is the default. Under **App grid → Sort by name…**, choose A → Z
-or Z → A and put folders first, last, or among apps by name. New apps follow
-the selected order. **Save current layout before sorting** is on by default.
+**Manual order** is the default. From the home menu, open **Application sorting → Sort by name…**
+to choose A → Z or Z → A. **Non-Latin names** can sort together by name or stay at the front
+or back in either direction. The first letter determines the group, skipping leading digits
+and punctuation. Comparisons within each group follow the runtime locale. Explicit folder
+placement takes priority. New apps follow the selected order. Enable **Also sort apps inside
+folders** to apply those name rules in folder dialogs. Turning it off brings back the folder's
+saved order.
+**Consolidate app pages** is on the Application sorting page. Sorting by name always fills
+earlier pages. In manual order, the switch uses your saved preference.
+**Save current layout before sorting** is on by default.
 **View backup** opens the snapshot in the right pane. Restoring any snapshot reapplies the saved
 app order and switches to manual order. When automatic sorting is active, the
 confirmation dialog explains that it will turn off.
 
 Switch between presets or disable **Use preset sizes** for granular control. Custom values are independent: changing the icon size does not overwrite the configured rows, columns, or spacing. Folder dialogs have their own rows, columns, gap, title-size and edge-padding controls; automatic edge padding follows the icon size and switches to a manual 0–96 px value when turned off, and the preview updates as soon as either value changes. **Layout snapshots** stores the whole arrangement, including `app-picker-layout` and folder membership. Save a named snapshot on the left. On the right, select a saved layout and use **Restore** or **Delete** in the fixed action bar.
 
-**Language**: the preferences UI follows the system locale. English is the source language, and a Simplified Chinese translation is included; the extension metadata description and settings pages switch automatically on Chinese systems.
+On the preferences home page, use **Options → Language** to choose **Follow system**,
+**English**, or **简体中文**. The window switches immediately and remembers your choice.
 
-The settings window opens on a short home menu with **App grid**, **Folder dialog** and **Layout snapshots**. The right pane follows the left navigation. **Home** and **App grid** share a live overview preview, and **Folder dialog** shows the configured panel with its title bar, grid and gaps. In narrow windows, **Show preview** or **Show saved layouts** opens the right pane in a drawer. While the extension is active, the overview preview uses measured App Grid tiles, icons, per-page item counts, page indicators, dock visibility and position, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Preview colors are varied deterministically from each application or folder ID, avoiding row or column color bands without flickering between redraws. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. The window defaults to a monitor-aware size within 480–1240 × 420–660, and the controls subpages scroll on smaller displays. When a custom grid exceeds the estimated screen capacity, the preview reports the mismatch and offers a Fit button that applies the suggested rows and columns.
+The settings window opens on a short home menu with **App grid**, **Folder dialog**, **Application sorting** and **Layout snapshots**. The right pane follows the left navigation. **Home**, **App grid** and **Application sorting** share a live overview preview, and **Folder dialog** shows the configured panel with its title bar, grid and gaps. In narrow windows, **Show preview** or **Show saved layouts** opens the right pane in a drawer. While the extension is active, the overview preview uses measured App Grid tiles, icons, per-page item counts, page indicators, dock visibility and position, search entry, workspace thumbnails, and Dash geometry from GNOME Shell instead of relying solely on a generic monitor estimate. Before live geometry is available, it reads Shell's top-level app-picker layout and folder IDs so folders and page boundaries still produce the correct visible icons. Preview colors are varied deterministically from each application or folder ID, avoiding row or column color bands without flickering between redraws. Folder detection follows system settings automatically and is not tied to fixed positions. Open the overview once after changing the layout to publish settled positions. The window defaults to a monitor-aware size within 480–1240 × 420–660, and the controls subpages scroll on smaller displays. When a custom grid exceeds the estimated screen capacity, the preview reports the mismatch and offers a Fit button that applies the suggested rows and columns.
 
 ## Requirements
 

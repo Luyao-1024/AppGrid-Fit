@@ -4,9 +4,10 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import Pango from 'gi://Pango';
-import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {ExtensionPreferences, gettext} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {
+    CONSOLIDATE_PAGES_KEY,
     DEFAULT_PAGE_CAPACITY,
     FOLDER_DIALOG_PAGE_PADDING,
     FOLDER_EDGE_PADDING_MAX,
@@ -15,10 +16,12 @@ import {
     FOLDER_MAX_TITLE_SIZE,
     FOLDER_MIN_DIMENSION,
     FOLDER_POSITION_KEY,
+    NON_LATIN_POSITION_KEY,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    SORT_FOLDER_APPS_KEY,
     SORT_ORDER_KEY,
     autoFolderEdgePadding,
     computePreviewColorIndex,
@@ -29,8 +32,9 @@ import {
     readFolderConfig,
     resolveFolderEdgePadding,
     resolvePreviewPages,
+    shouldConsolidateAppPages,
 } from './config.js';
-import {FOLDER_POSITIONS, SORT_INTERFACE, SORT_ORDERS, SORT_PATH} from './gridSort.js';
+import {SORT_INTERFACE, SORT_ORDERS, SORT_PATH, SORT_POSITIONS} from './gridSort.js';
 import {
     MAX_SNAPSHOTS,
     addSnapshot,
@@ -62,6 +66,37 @@ const CUSTOM_MIN_DIMENSION = 2;
 const CUSTOM_MAX_DIMENSION = 20;
 
 const SIZE_NAMES = ['Large', 'Medium', 'Small', 'Tiny'];
+const PREFS_LANGUAGE_KEY = 'prefs-language';
+const PREFS_LANGUAGES = ['system', 'en', 'zh_CN'];
+
+function readPrefsCatalog(contents) {
+    const view = new DataView(contents.buffer, contents.byteOffset, contents.byteLength);
+    const magic = view.getUint32(0);
+    const littleEndian = magic === 0xde120495;
+    if (!littleEndian && magic !== 0x950412de)
+        throw new Error('Invalid gettext catalog');
+
+    const count = view.getUint32(8, littleEndian);
+    const originals = view.getUint32(12, littleEndian);
+    const translations = view.getUint32(16, littleEndian);
+    const decoder = new TextDecoder();
+    const readMessage = entry => {
+        const length = view.getUint32(entry, littleEndian);
+        const offset = view.getUint32(entry + 4, littleEndian);
+        if (offset + length > contents.length)
+            throw new Error('Truncated gettext catalog');
+        return decoder.decode(contents.subarray(offset, offset + length));
+    };
+
+    const catalog = new Map();
+    for (let index = 0; index < count; index++) {
+        const message = readMessage(originals + index * 8);
+        const translation = readMessage(translations + index * 8);
+        if (message && translation)
+            catalog.set(message, translation);
+    }
+    return catalog;
+}
 
 function clampCustomDimension(value) {
     return Math.max(CUSTOM_MIN_DIMENSION,
@@ -581,11 +616,11 @@ function folderSettingsFor(folderSettings, id) {
     });
 }
 
-function sortOrderLabels() {
+function sortOrderLabels(_) {
     return [_('Manual order'), _('A → Z'), _('Z → A')];
 }
 
-function showGridSortDialog(window, settings, cancellable, onComplete, onManageBackups) {
+function showGridSortDialog(window, settings, _, cancellable, onComplete, onManageBackups) {
     const dialog = new Adw.Window({
         title: _('Sort by name'),
         transient_for: window,
@@ -607,7 +642,7 @@ function showGridSortDialog(window, settings, cancellable, onComplete, onManageB
     const options = new Adw.PreferencesGroup();
     const direction = new Adw.ActionRow({title: _('Sort direction')});
     const directionBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 4});
-    const directionButtons = sortOrderLabels().map(label => new Gtk.CheckButton({label}));
+    const directionButtons = sortOrderLabels(_).map(label => new Gtk.CheckButton({label}));
     for (const [index, button] of directionButtons.entries()) {
         if (index > 0)
             button.set_group(directionButtons[0]);
@@ -620,14 +655,28 @@ function showGridSortDialog(window, settings, cancellable, onComplete, onManageB
         model: Gtk.StringList.new([
             _('Sort by name with apps'), _('Always first'), _('Always last'),
         ]),
-        selected: FOLDER_POSITIONS.indexOf(settings.get_string(FOLDER_POSITION_KEY)),
+        selected: SORT_POSITIONS.indexOf(settings.get_string(FOLDER_POSITION_KEY)),
+    });
+    const nonLatinPosition = new Adw.ComboRow({
+        title: _('Non-Latin names'),
+        subtitle: _('Based on the first letter, such as 中 or Я'),
+        model: Gtk.StringList.new([
+            _('Sort together by name'), _('Always first'), _('Always last'),
+        ]),
+        selected: SORT_POSITIONS.indexOf(settings.get_string(NON_LATIN_POSITION_KEY)),
     });
     const backup = new Adw.SwitchRow({
         title: _('Save current layout before sorting'),
         active: true,
     });
+    const sortFolders = new Adw.SwitchRow({
+        title: _('Also sort apps inside folders'),
+        active: settings.get_boolean(SORT_FOLDER_APPS_KEY),
+    });
     options.add(direction);
     options.add(position);
+    options.add(nonLatinPosition);
+    options.add(sortFolders);
     options.add(backup);
     content.append(options);
 
@@ -647,7 +696,7 @@ function showGridSortDialog(window, settings, cancellable, onComplete, onManageB
     let pending = false;
     const updateDirection = () => {
         const manual = directionButtons[0].active;
-        position.sensitive = backup.sensitive = !manual;
+        position.sensitive = nonLatinPosition.sensitive = sortFolders.sensitive = backup.sensitive = !manual;
         sortButton.label = manual ? _('Apply') : _('Sort');
     };
     for (const button of directionButtons) {
@@ -679,8 +728,9 @@ function showGridSortDialog(window, settings, cancellable, onComplete, onManageB
         options.sensitive = actions.sensitive = false;
         feedback.visible = manageButton.visible = false;
         Gio.DBus.session.call('org.gnome.Shell', SORT_PATH, SORT_INTERFACE,
-            'SortGrid', new GLib.Variant('(bss)', [directionButtons[2].active,
-                FOLDER_POSITIONS[position.selected], backupName]),
+            'SortGridWithOptions', new GLib.Variant('(bssbs)', [directionButtons[2].active,
+                SORT_POSITIONS[position.selected], backupName, sortFolders.active,
+                SORT_POSITIONS[nonLatinPosition.selected]]),
             new GLib.VariantType('(ss)'), Gio.DBusCallFlags.NONE, 10000,
             cancellable, (connection, result) => {
                 let status;
@@ -749,18 +799,25 @@ function readFallbackPages(shellSettings, folderSettings, consolidate) {
 }
 
 export default class AppGridSizePrefs extends ExtensionPreferences {
+    _getTranslator(language) {
+        if (language === 'system')
+            return gettext;
+        if (language === 'zh_CN') {
+            try {
+                const domain = this.metadata['gettext-domain'];
+                const file = this.dir.resolve_relative_path(`locale/${language}/LC_MESSAGES/${domain}.mo`);
+                const [, contents] = file.load_contents(null);
+                const catalog = readPrefsCatalog(contents);
+                return message => catalog.get(message) ?? message;
+            } catch (error) {
+                console.error(`[appgrid-size] Could not load ${language} translations: ${error.message}`);
+            }
+        }
+        return message => message;
+    }
+
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
-        const cleanupFns = [];
-        let cleanedUp = false;
-
-        window.connect('close-request', () => {
-            if (cleanedUp)
-                return false;
-            cleanedUp = true;
-            for (const fn of cleanupFns) fn();
-            return false;
-        });
         const display = Gdk.Display.get_default();
         const monitor = display?.get_monitors()?.get_item(0);
         const monitorWidth = monitor?.get_geometry().width ?? 1280;
@@ -770,15 +827,19 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Math.max(420, Math.min(660, monitorHeight - 100)));
 
         const page = new Adw.PreferencesPage({
-            title: _('App Grid'),
             icon_name: 'view-app-grid-symbolic',
         });
         window.add(page);
 
         const pageClamp = findDescendant(page, Adw.Clamp);
         if (pageClamp) {
-            pageClamp.maximum_size = 1400;
-            pageClamp.tightening_threshold = 900;
+            pageClamp.maximum_size = GLib.MAXINT32;
+            pageClamp.tightening_threshold = GLib.MAXINT32;
+            const pageBody = pageClamp.get_child();
+            const insets = new Gtk.CssProvider();
+            insets.load_from_data('box.appgrid-fit-page-body { margin: 24px; }', -1);
+            pageBody.add_css_class('appgrid-fit-page-body');
+            pageBody.get_style_context().add_provider(insets, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
 
         const rootGroup = new Adw.PreferencesGroup({vexpand: true});
@@ -797,8 +858,43 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const compact = new Adw.Breakpoint({
             condition: Adw.BreakpointCondition.parse('max-width: 940px'),
         });
+        compact.add_setter(splitView, 'collapsed', true);
+        rootGroup.add(splitView);
+        window.add_breakpoint(compact);
 
-        const {overview, folder, cleanupFns: prevFns} = this._buildPreviewPane(settings, window);
+        let cleanupContent = null;
+        let rebuildId = 0;
+        const rebuild = () => {
+            cleanupContent?.();
+            const _ = this._getTranslator(settings.get_string(PREFS_LANGUAGE_KEY));
+            page.title = _('App Grid');
+            cleanupContent = this._buildPreferencesContent(settings, window, splitView, _);
+        };
+        rebuild();
+        const languageChangedId = settings.connect(`changed::${PREFS_LANGUAGE_KEY}`, () => {
+            if (rebuildId)
+                return;
+            rebuildId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                rebuildId = 0;
+                rebuild();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        window.connect('close-request', () => {
+            if (!cleanupContent)
+                return false;
+            settings.disconnect(languageChangedId);
+            if (rebuildId)
+                GLib.Source.remove(rebuildId);
+            cleanupContent();
+            cleanupContent = null;
+            return false;
+        });
+    }
+
+    _buildPreferencesContent(settings, window, splitView, _) {
+        const cleanupFns = [];
+        const {overview, folder, cleanupFns: prevFns} = this._buildPreviewPane(settings, window, _);
         cleanupFns.push(...prevFns);
 
         const sidebar = new Gtk.Stack({
@@ -840,7 +936,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                     ? Gtk.StackTransitionType.SLIDE_LEFT_RIGHT
                     : Gtk.StackTransitionType.CROSSFADE;
                 controls.set_visible_child_name(name);
-                sidebar.set_visible_child_name(name === 'grid' ? 'root' : name);
+                sidebar.set_visible_child_name(name === 'folder' || name === 'snapshots'
+                    ? name : 'root');
                 previewButton.label = name === 'snapshots' ? _('Show saved layouts') : _('Show preview');
             }
             if (reveal)
@@ -852,10 +949,9 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
                 splitView.show_sidebar = false;
             showPage(fromSnapshots ? snapshotBackPage : 'root');
         };
-        compact.add_setter(splitView, 'collapsed', true);
         connectSignal(cleanupFns, splitView, 'notify::collapsed', updateSidebarWidth);
         const {controls, snapshotsPane, cleanupFns: ctrlFns} =
-            this._buildSettingsPanes(settings, window, {showPage, goBack});
+            this._buildSettingsPanes(settings, window, _, {showPage, goBack});
         cleanupFns.push(...ctrlFns);
 
         const controlsBox = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
@@ -870,11 +966,12 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         splitView.set_content(controlsBox);
         splitView.set_sidebar(sidebarBox);
         updateSidebarWidth();
-        rootGroup.add(splitView);
-        window.add_breakpoint(compact);
+        return () => {
+            for (const fn of cleanupFns) fn();
+        };
     }
 
-    _buildSettingsPanes(settings, window, {showPage, goBack}) {
+    _buildSettingsPanes(settings, window, _, {showPage, goBack}) {
         const cleanupFns = [];
 
         const clampContent = child => new Adw.Clamp({
@@ -891,6 +988,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const rootBox = createContentBox();
         const gridBox = createContentBox();
         const folderBox = createContentBox();
+        const sortBox = createContentBox();
         const snapshotControlsBox = createContentBox();
         const snapshotsBox = createContentBox();
 
@@ -1034,31 +1132,37 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         gridGroup.add(infoRow);
         gridBox.append(gridGroup);
 
-        const sortGroup = new Adw.PreferencesGroup({title: _('Application order')});
+        const sortGroup = new Adw.PreferencesGroup();
         const sortRow = new Adw.ActionRow({title: _('Sort by name…')});
-        const updateSortMode = () => {
-            sortRow.subtitle = sortOrderLabels()[SORT_ORDERS.indexOf(settings.get_string(SORT_ORDER_KEY))];
-        };
-        connectSignal(cleanupFns, settings, `changed::${SORT_ORDER_KEY}`, updateSortMode);
-        updateSortMode();
         const sortButton = new Gtk.Button({label: _('Sort…'), valign: Gtk.Align.CENTER});
         sortRow.add_suffix(sortButton);
         sortRow.activatable_widget = sortButton;
         sortGroup.add(sortRow);
-        const sortStatus = new Adw.ActionRow({visible: false});
-        const viewBackupButton = new Gtk.Button({
-            label: _('View backup'), valign: Gtk.Align.CENTER,
+        const consolidateRow = new Adw.SwitchRow({title: _('Consolidate app pages')});
+        const updateConsolidation = () => {
+            const automatic = settings.get_string(SORT_ORDER_KEY) !== 'manual';
+            consolidateRow.active = shouldConsolidateAppPages(settings);
+            consolidateRow.sensitive = !automatic && settings.is_writable(CONSOLIDATE_PAGES_KEY);
+            consolidateRow.subtitle = automatic
+                ? _('Automatically enabled when sorting by name')
+                : _('Fill earlier pages and permanently save the new app order');
+        };
+        consolidateRow.connect('notify::active', () => {
+            if (settings.get_string(SORT_ORDER_KEY) === 'manual' &&
+                settings.get_boolean(CONSOLIDATE_PAGES_KEY) !== consolidateRow.active)
+                settings.set_boolean(CONSOLIDATE_PAGES_KEY, consolidateRow.active);
         });
-        sortStatus.add_suffix(viewBackupButton);
-        sortGroup.add(sortStatus);
-        const consolidateRow = new Adw.SwitchRow({
-            title: _('Consolidate app pages'),
-            subtitle: _('Fill earlier pages and permanently save the new app order'),
-        });
-        settings.bind('consolidate-pages', consolidateRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
+        for (const key of [CONSOLIDATE_PAGES_KEY, SORT_ORDER_KEY])
+            connectSignal(cleanupFns, settings, `changed::${key}`, updateConsolidation);
+        updateConsolidation();
         sortGroup.add(consolidateRow);
-        gridBox.append(sortGroup);
+        const sortStatus = new Adw.ActionRow({visible: false});
+        sortGroup.add(sortStatus);
+        sortBox.append(sortGroup);
+        const viewBackupButton = new Gtk.Button({
+            label: _('View backup'), halign: Gtk.Align.START, visible: false,
+        });
+        sortBox.append(viewBackupButton);
 
         const folderGroup = new Adw.PreferencesGroup({
             title: _('Folder grid'),
@@ -1324,15 +1428,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         cleanupFns.push(() => sortCancellable.cancel());
         let sortBackupId = '';
         sortButton.connect('clicked', () => {
-            showGridSortDialog(window, settings, sortCancellable, (status, snapshotId) => {
+            showGridSortDialog(window, settings, _, sortCancellable, (status, snapshotId) => {
                 sortBackupId = snapshotId;
                 sortStatus.title = {
                     manual: _('Manual order'),
-                    sorted: _('App grid sorted'),
                     unchanged: _('The app grid is already in this order'),
                     'sort-failed': _('Could not sort the app grid.'),
-                }[status];
-                sortStatus.visible = true;
+                }[status] ?? '';
+                sortStatus.visible = Boolean(sortStatus.title);
                 viewBackupButton.visible = Boolean(sortBackupId);
             }, () => showPage('snapshots', true));
         });
@@ -1515,6 +1618,14 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         const layoutGroup = new Adw.PreferencesGroup({title: _('Layout')});
         const appGridRow = addNavRow(layoutGroup, _('App grid'), () => showPage('grid'));
         const folderRow = addNavRow(layoutGroup, _('Folder dialog'), () => showPage('folder'));
+        const sortingRow = addNavRow(layoutGroup, _('Application sorting'), () => showPage('sorting'));
+
+        const updateSortMode = () => {
+            const label = sortOrderLabels(_)[SORT_ORDERS.indexOf(settings.get_string(SORT_ORDER_KEY))];
+            sortingRow.subtitle = sortRow.subtitle = label;
+        };
+        connectSignal(cleanupFns, settings, `changed::${SORT_ORDER_KEY}`, updateSortMode);
+        updateSortMode();
 
         const optionsGroup = new Adw.PreferencesGroup({title: _('Options')});
         const namesRow = new Adw.SwitchRow({
@@ -1525,6 +1636,18 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         optionsGroup.add(namesRow);
         const snapshotsRow = addNavRow(optionsGroup, _('Layout snapshots'), () => showPage('snapshots'));
+        const languageRow = new Adw.ComboRow({
+            title: _('Language'),
+            model: Gtk.StringList.new([_('Follow system'), 'English', '简体中文']),
+            selected: PREFS_LANGUAGES.indexOf(settings.get_string(PREFS_LANGUAGE_KEY)),
+            sensitive: settings.is_writable(PREFS_LANGUAGE_KEY),
+        });
+        languageRow.connect('notify::selected', () => {
+            const language = PREFS_LANGUAGES[languageRow.selected];
+            if (language)
+                settings.set_string(PREFS_LANGUAGE_KEY, language);
+        });
+        optionsGroup.add(languageRow);
         rootBox.append(layoutGroup);
         rootBox.append(optionsGroup);
 
@@ -1574,6 +1697,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         stack.add_named(buildPage(null, rootBox), 'root');
         stack.add_named(buildPage(_('App grid'), gridBox), 'grid');
         stack.add_named(buildPage(_('Folder dialog'), folderBox), 'folder');
+        stack.add_named(buildPage(_('Application sorting'), sortBox), 'sorting');
         stack.add_named(buildPage(_('Layout snapshots'), snapshotControlsBox), 'snapshots');
         stack.set_visible_child_name('root');
 
@@ -1583,7 +1707,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         return {controls: stack, snapshotsPane, cleanupFns};
     }
 
-    _buildPreviewPane(settings, window) {
+    _buildPreviewPane(settings, window, _) {
         const cleanupFns = [];
 
         const overviewPage = new Gtk.Box({
@@ -1814,7 +1938,7 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
 
             const config = readGridConfig(settings);
             const {iconSize, rows, columns, rowGap, colGap, usePresets} = config;
-            const consolidate = settings.get_boolean('consolidate-pages');
+            const consolidate = shouldConsolidateAppPages(settings);
             const runtimeLayout = decodePreviewLayout(
                 settings.get_string(PREVIEW_LAYOUT_KEY));
             const mW = runtimeLayout?.monitor.width ?? ps.monitorW;
@@ -1984,6 +2108,8 @@ export default class AppGridSizePrefs extends ExtensionPreferences {
         }
         connectSignal(cleanupFns, settings,
             `changed::${PREVIEW_LAYOUT_KEY}`, updatePreview);
+        connectSignal(cleanupFns, settings,
+            `changed::${SORT_ORDER_KEY}`, updatePreview);
         connectSignal(cleanupFns, shellSettings,
             'changed::app-picker-layout', updatePreview);
         connectSignal(cleanupFns, folderSettings,
