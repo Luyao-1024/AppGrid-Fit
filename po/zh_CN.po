@@ -1,7 +1,7 @@
 # Simplified Chinese translation for AppGrid Fit.
 msgid ""
 msgstr ""
-"Project-Id-Version: AppGrid Fit 1.3.4\n"
+"Project-Id-Version: AppGrid Fit 1.3.6\n"
 "Report-Msgid-Bugs-To: https://github.com/Luyao-1024/AppGrid-Fit/issues\n"
 "POT-Creation-Date: 2026-10-26 19:00+0800\n"
 "PO-Revision-Date: 2026-10-26 19:00+0800\n"
@@ -22,14 +22,20 @@ msgstr "返回"
 msgid "Grid size"
 msgstr "网格尺寸"
 
-msgid "Application order"
-msgstr "应用排列"
+msgid "Application sorting"
+msgstr "应用排序"
+
+msgid "Also sort apps inside folders"
+msgstr "同时排序文件夹内的应用"
 
 msgid "Consolidate app pages"
 msgstr "合并应用页面"
 
 msgid "Fill earlier pages and permanently save the new app order"
 msgstr "填充前面的页面并永久保存新的应用顺序"
+
+msgid "Automatically enabled when sorting by name"
+msgstr "按名称排序时自动启用"
 
 msgid "Manual order"
 msgstr "手动排列"
@@ -63,6 +69,15 @@ msgstr "Z → A（逆序）"
 
 msgid "Folder position"
 msgstr "文件夹位置"
+
+msgid "Non-Latin names"
+msgstr "中文等非拉丁名称"
+
+msgid "Based on the first letter, such as 中 or Я"
+msgstr "按首个文字判断，例如「中」或「Я」"
+
+msgid "Sort together by name"
+msgstr "按名称混排"
 
 msgid "Sort by name with apps"
 msgstr "与应用按名称混排"
@@ -108,9 +123,6 @@ msgstr "暂时无法排序。请确认 AppGrid Fit 已启用，然后重试。"
 
 msgid "View backup"
 msgstr "查看备份"
-
-msgid "App grid sorted"
-msgstr "应用网格已排序"
 
 msgid "The app grid is already in this order"
 msgstr "应用网格已经按此顺序排列"
@@ -279,6 +291,12 @@ msgstr "文件夹弹窗"
 
 msgid "Options"
 msgstr "选项"
+
+msgid "Language"
+msgstr "语言"
+
+msgid "Follow system"
+msgstr "跟随系统"
 
 msgid "Show application names"
 msgstr "显示应用名称"

@@ -15,6 +15,7 @@ import {
     decodePreviewLayout,
     resolveFolderEdgePadding,
     resolvePreviewPages,
+    shouldConsolidateAppPages,
     splitPageItemCounts,
     splitPageItems,
 } from '../config.js'
@@ -142,6 +143,17 @@ test('all settings keys are unique', () => {
     assert.equal(new Set(SETTINGS_KEYS).size, SETTINGS_KEYS.length)
     assert.ok(SETTINGS_KEYS.includes('folder-edge-padding-auto'))
     assert.ok(SETTINGS_KEYS.includes('folder-edge-padding'))
+})
+
+test('automatic sorting fills earlier pages independently of the manual preference', () => {
+    const enabled = (order, manualPreference) => shouldConsolidateAppPages({
+        get_string: () => order,
+        get_boolean: () => manualPreference,
+    })
+    assert.equal(enabled('manual', false), false)
+    assert.equal(enabled('manual', true), true)
+    assert.equal(enabled('ascending', false), true)
+    assert.equal(enabled('descending', false), true)
 })
 
 test('automatic folder edge padding follows the icon size', () => {

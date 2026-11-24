@@ -42,6 +42,40 @@ test('uses the selected locale and preserves ties when reversing', () => {
     assert.equal(sameGridPages(sorted, [[appApple], [firstZebra, secondZebra]]), false)
 })
 
+test('keeps non-Latin names in the selected group in both sort directions', () => {
+    const chinese = {id: 'zh', name: '123 中文'}
+    const cyrillic = {id: 'ru', name: 'Русский'}
+    const accentedLatin = {id: 'latin', name: 'Éditeur 中文'}
+    const digits = {id: 'digits', name: '123'}
+    const items = [chinese, accentedLatin, digits, cyrillic]
+    for (const descending of [false, true]) {
+        const direction = descending ? -1 : 1
+        const byName = (left, right) => direction * collator.compare(left.name, right.name)
+        const nonLatin = [chinese, cyrillic].sort(byName)
+        const latin = [accentedLatin, digits].sort(byName)
+        for (const [nonLatinPosition, expected] of [
+            ['first', [...nonLatin, ...latin]],
+            ['last', [...latin, ...nonLatin]],
+            ['mixed', [...items].sort(byName)],
+        ]) {
+            assert.deepEqual(sortGridPages([items], 2, {
+                descending, folderPosition: 'mixed', folders, nonLatinPosition, collator,
+            }).flat(), expected)
+        }
+    }
+})
+
+test('gives explicit folder placement priority over name groups', () => {
+    const chineseApp = {id: 'zh', name: '设置'}
+    const pages = [[chineseApp, folderBanana, appApple]]
+    assert.deepEqual(sortGridPages(pages, 3, {
+        descending: false, folderPosition: 'first', folders, nonLatinPosition: 'first', collator,
+    }), [[folderBanana, chineseApp, appApple]])
+    assert.deepEqual(sortGridPages(pages, 3, {
+        descending: true, folderPosition: 'last', folders, nonLatinPosition: 'last', collator,
+    }), [[appApple, chineseApp, folderBanana]])
+})
+
 test('restores saved positions and page boundaries from different live pages', () => {
     const newApp = {id: 'new.desktop', name: 'New'}
     const saved = [

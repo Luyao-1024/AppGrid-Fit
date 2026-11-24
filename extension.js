@@ -9,16 +9,19 @@ import {
     FOLDER_DIALOG_PAGE_PADDING,
     FOLDER_EDGE_PADDING_MAX,
     FOLDER_POSITION_KEY,
+    NON_LATIN_POSITION_KEY,
     PRESETS,
     PRESET_WIDTH_RATIO,
     PREVIEW_LAYOUT_KEY,
     SETTINGS_KEYS,
+    SORT_FOLDER_APPS_KEY,
     SORT_ORDER_KEY,
     UNCONSTRAINED_SPACING,
     computeGridFit,
     computePreviewTileSize,
     readFolderConfig,
     resolveFolderEdgePadding,
+    shouldConsolidateAppPages,
 } from './config.js'
 import {
     reflowPages,
@@ -27,7 +30,7 @@ import {
     syncPageManagerPages,
 } from './gridPages.js'
 import {
-    FOLDER_POSITIONS, SORT_PATH, SORT_XML, restoreGridPages, sameGridPages, sortGridPages,
+    SORT_PATH, SORT_POSITIONS, SORT_XML, compareAppNames, restoreGridPages, sameGridPages, sortGridPages,
 } from './gridSort.js'
 import {
     applyAppNameVisibility,
@@ -111,6 +114,8 @@ export default class AppGridSizeExtension extends Extension {
         this._apply()
         this._sortObject = Gio.DBusExportedObject.wrapJSObject(SORT_XML, {
             SortGrid: (...args) => this._sortGrid(...args),
+            SortGridWithFolders: (...args) => this._sortGrid(...args),
+            SortGridWithOptions: (...args) => this._sortGrid(...args),
             RestoreLayout: id => this._restoreSavedLayout(id),
         })
         this._sortObject.export(Gio.DBus.session, SORT_PATH)
@@ -126,6 +131,7 @@ export default class AppGridSizeExtension extends Extension {
         this._disconnectTheme()
         this._disconnectSettings()
         this._disconnectGridBindings()
+        this._clearFolderSort()
         this._restoreOriginalLayout()
         this._resetState()
     }
@@ -136,6 +142,7 @@ export default class AppGridSizeExtension extends Extension {
         this._sortDisplay = null
         this._sortDisplayId = 0
         this._sortAppIds = null
+        this._folderSorts = new Map()
         this._restoringSnapshot = false
         this._original = null
         this._originalFolders = new Map()
@@ -169,13 +176,17 @@ export default class AppGridSizeExtension extends Extension {
     }
 
     _connectSettings() {
-        for (const key of SETTINGS_KEYS) {
+        for (const key of [...SETTINGS_KEYS, SORT_FOLDER_APPS_KEY]) {
             this._sigIds.push(this._settings.connect(
                 `changed::${key}`, () => this._scheduleApply()))
         }
         this._sigIds.push(this._settings.connect(`changed::${SORT_ORDER_KEY}`, () => {
             if (this._settings.get_string(SORT_ORDER_KEY) === 'manual')
                 this._sortAppIds = null
+            this._scheduleApply()
+        }))
+        this._sigIds.push(this._settings.connect(`changed::${NON_LATIN_POSITION_KEY}`, () => {
+            this._sortAppIds = null
             this._scheduleApply()
         }))
     }
@@ -392,9 +403,11 @@ export default class AppGridSizeExtension extends Extension {
         this._sortGrid(order === 'descending', this._settings.get_string(FOLDER_POSITION_KEY), '')
     }
 
-    _sortGrid(descending, folderPosition, backupName) {
+    _sortGrid(descending, folderPosition, backupName,
+        sortFolders = this._settings.get_boolean(SORT_FOLDER_APPS_KEY),
+        nonLatinPosition = this._settings.get_string(NON_LATIN_POSITION_KEY)) {
         const grid = this._readSortableGrid()
-        if (!grid || !FOLDER_POSITIONS.includes(folderPosition) ||
+        if (!grid || !SORT_POSITIONS.includes(folderPosition) || !SORT_POSITIONS.includes(nonLatinPosition) ||
             !global.settings.is_writable(PICKER_KEY) ||
             !this._settings.is_writable(SORT_ORDER_KEY) ||
             !this._settings.is_writable(FOLDER_POSITION_KEY))
@@ -402,11 +415,19 @@ export default class AppGridSizeExtension extends Extension {
         const {appDisplay, lm, originalPages, visiblePages, rows, columns} = grid
         const order = descending ? 'descending' : 'ascending'
         const sortedPages = sortGridPages(visiblePages, rows * columns, {
-            descending, folderPosition, folders: new Set(appDisplay._folderIcons),
+            descending, folderPosition, nonLatinPosition, folders: new Set(appDisplay._folderIcons),
         })
         const pagesChanged = !sameGridPages(visiblePages, sortedPages)
-        const modeChanged = this._settings.get_string(SORT_ORDER_KEY) !== order ||
-            this._settings.get_string(FOLDER_POSITION_KEY) !== folderPosition
+        const sortOptions = [
+            [FOLDER_POSITION_KEY, new GLib.Variant('s', folderPosition)],
+            [SORT_FOLDER_APPS_KEY, new GLib.Variant('b', sortFolders)],
+            [NON_LATIN_POSITION_KEY, new GLib.Variant('s', nonLatinPosition)],
+            [SORT_ORDER_KEY, new GLib.Variant('s', order)],
+        ].map(([key, value]) => ({key, value, before: this._settings.get_value(key)}))
+            .filter(({value, before}) => !value.equal(before))
+        if (sortOptions.some(({key}) => !this._settings.is_writable(key)))
+            return ['unavailable', '']
+        const modeChanged = sortOptions.length > 0
 
         let snapshotId = ''
         if (backupName && (pagesChanged || modeChanged)) {
@@ -439,7 +460,7 @@ export default class AppGridSizeExtension extends Extension {
         }
 
         const previousPicker = global.settings.get_value(PICKER_KEY)
-        const previousPosition = this._settings.get_string(FOLDER_POSITION_KEY)
+        const appliedOptions = []
         try {
             if (pagesChanged) {
                 const expectedPicker = packPickerPages(sortedPages)
@@ -448,14 +469,16 @@ export default class AppGridSizeExtension extends Extension {
                 if (!global.settings.get_value(PICKER_KEY).equal(expectedPicker))
                     throw new Error('Shell did not save the sorted app pages')
             }
-            if (modeChanged && (!this._settings.set_string(FOLDER_POSITION_KEY, folderPosition) ||
-                !this._settings.set_string(SORT_ORDER_KEY, order)))
-                throw new Error('Could not save the sorting options')
+            for (const option of sortOptions) {
+                if (!this._settings.set_value(option.key, option.value))
+                    throw new Error('Could not save the sorting options')
+                appliedOptions.push(option)
+            }
         } catch (error) {
             logError(error, '[appgrid-size] failed to sort the app grid')
             try {
-                if (modeChanged)
-                    this._settings.set_string(FOLDER_POSITION_KEY, previousPosition)
+                for (const {key, before} of appliedOptions.reverse())
+                    this._settings.set_value(key, before)
                 if (!global.settings.get_value(PICKER_KEY).equal(previousPicker))
                     global.settings.set_value(PICKER_KEY, previousPicker)
                 if (pagesChanged) {
@@ -1049,6 +1072,7 @@ export default class AppGridSizeExtension extends Extension {
                 ids.push(icon.connect('apps-changed',
                     () => this._scheduleApply()))
                 ids.push(icon.connect('destroy', () => {
+                    this._restoreFolderSort(icon)
                     extension._folderSignalIds.delete(icon)
                     extension._folderOpenOriginals.delete(icon)
                 }))
@@ -1062,6 +1086,69 @@ export default class AppGridSizeExtension extends Extension {
                 }
             } catch (_error) {}
             this._folderSignalIds.set(icon, ids)
+        }
+    }
+
+    _syncFolderSort(appDisplay) {
+        const order = this._settings.get_boolean(SORT_FOLDER_APPS_KEY)
+            ? this._settings.get_string(SORT_ORDER_KEY) : 'manual'
+        const nonLatinPosition = this._settings.get_string(NON_LATIN_POSITION_KEY)
+        const icons = appDisplay?._folderIcons ?? []
+        for (const icon of this._folderSorts.keys()) {
+            if (!icons.includes(icon))
+                this._restoreFolderSort(icon)
+        }
+        if (order === 'manual') {
+            this._clearFolderSort()
+            return
+        }
+        for (const icon of icons) {
+            const view = icon.view
+            if (!Array.isArray(view?._apps) || typeof view._loadApps !== 'function' ||
+                typeof view._getItemPosition !== 'function' || typeof view._redisplay !== 'function')
+                continue
+            const activeSort = this._folderSorts.get(icon)
+            if (activeSort?.order === order && activeSort.nonLatinPosition === nonLatinPosition)
+                continue
+            this._restoreFolderSort(icon)
+            const original = view._loadApps
+            const hadOwnMethod = Object.hasOwn(view, '_loadApps')
+            const collator = new Intl.Collator()
+            const sortedLoadApps = function (...args) {
+                const items = original.apply(this, args)
+                items.sort((left, right) => compareAppNames(left, right,
+                    order === 'descending', collator, nonLatinPosition))
+                this._apps = items.map(item => item.app)
+                return items
+            }
+            view._loadApps = sortedLoadApps
+            this._folderSorts.set(icon, {
+                view, original, hadOwnMethod, sortedLoadApps, order, nonLatinPosition,
+            })
+            view._redisplay()
+            icon.icon.update()
+        }
+    }
+
+    _restoreFolderSort(icon) {
+        const patch = this._folderSorts.get(icon)
+        if (!patch)
+            return
+        this._folderSorts.delete(icon)
+        const {view, original, hadOwnMethod, sortedLoadApps} = patch
+        if (view._loadApps !== sortedLoadApps)
+            return
+        if (hadOwnMethod)
+            view._loadApps = original
+        else
+            delete view._loadApps
+    }
+
+    _clearFolderSort() {
+        for (const icon of this._folderSorts.keys()) {
+            this._restoreFolderSort(icon)
+            icon.view._redisplay()
+            icon.icon.update()
         }
     }
 
@@ -1186,7 +1273,7 @@ export default class AppGridSizeExtension extends Extension {
             if (config.autoFit)
                 config = this._computeAutoFit(grid, lm, config)
 
-            const consolidate = this._settings.get_boolean('consolidate-pages')
+            const consolidate = shouldConsolidateAppPages(this._settings)
             this._activeConfig = {...config, consolidate}
             this._applyLayout(grid, lm, config)
             this._applyFolderLayouts()
@@ -1211,6 +1298,7 @@ export default class AppGridSizeExtension extends Extension {
                     this._savePages()
                 this._sortNewApps()
             }
+            this._syncFolderSort(appDisplay)
 
             this._forceRelayout(grid)
             this._publishPreviewLayout(grid)
@@ -1218,6 +1306,7 @@ export default class AppGridSizeExtension extends Extension {
                 this._scheduleSettledPublish()
         } catch (error) {
             this._disconnectGridBindings()
+            this._clearFolderSort()
             this._restoreOriginalLayout()
             this._applied = false
             logError(error, '[appgrid-size] failed to apply grid layout')

@@ -57,7 +57,8 @@ SNAPSHOT_SETTINGS_KEYS = (
     'folder-row-spacing', 'folder-column-spacing',
     'folder-title-size', 'folder-edge-padding-auto',
     'folder-edge-padding', 'show-app-names',
-    'app-grid-sort-order', 'app-grid-folder-position',
+    'app-grid-sort-order', 'app-grid-folder-position', 'sort-folder-apps',
+    'app-grid-non-latin-position',
 )
 BUS_ADDRESS = os.environ.get(
     'DBUS_SESSION_BUS_ADDRESS', f'unix:path=/run/user/{os.getuid()}/bus')
@@ -1969,12 +1970,12 @@ def check_layout_snapshots():
 
 
 def check_grid_sort():
-    def sort_grid(descending, position, name=''):
+    def sort_grid(descending, position, name='', sort_folders=False, non_latin='mixed'):
         return ast.literal_eval(output([
             'gdbus', 'call', '--session', '--dest', 'org.gnome.Shell',
             '--object-path', '/org/gnome/Shell/Extensions/AppGridFit',
-            '--method', 'org.gnome.Shell.Extensions.AppGridFit.SortGrid',
-            str(descending).lower(), position, name,
+            '--method', 'org.gnome.Shell.Extensions.AppGridFit.SortGridWithOptions',
+            str(descending).lower(), position, name, str(sort_folders).lower(), non_latin,
         ]))
 
     def expected_order(descending, position):
@@ -2007,12 +2008,17 @@ JSON.stringify({"groups.reverse().flat()" if position == 'first' else 'groups.fl
     wait_for(lambda: removed_ids.isdisjoint(main_item_ids()),
         'grid after the snapshot test apps are uninstalled', timeout=30)
     previous_store = gs_get('layout-snapshots')
+    previous_folder_sort = gs_get('sort-folder-apps')
+    previous_non_latin = gs_get('app-grid-non-latin-position')
     app_ids = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
     new_app = 'appgrid-sort-new.desktop'
+    chinese_app = 'appgrid-sort-chinese.desktop'
     try:
         check('application ordering defaults to manual',
             gs_get('app-grid-sort-order') == "'manual'", gs_get('app-grid-sort-order'))
+        check('folder sorting is off by default', previous_folder_sort == 'false')
         gs_set('layout-snapshots', '')
+        folder_before = folder_state()['itemIds']
         ascending = expected_order(False, 'first')
         result = sort_grid(False, 'first')
         check('sorting without backup sorts across pages and puts folders first',
@@ -2032,7 +2038,9 @@ true;
             before[0])
         size = len(before[0])
         descending = expected_order(True, 'last')
-        result, snapshot_id = sort_grid(True, 'last', 'Before sorting')
+        check('sorting the grid with the switch off keeps the folder order',
+            folder_state()['itemIds'] == folder_before, folder_before)
+        result, snapshot_id = sort_grid(True, 'last', 'Before sorting', sort_folders=True)
         after = live_pages()
         check('descending sort fills pages with folders last',
             result == 'sorted' and len(after) > 1 and
@@ -2040,6 +2048,11 @@ true;
             flattened(after) == descending and
             parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == app_ids,
             result)
+        folder_descending = sorted(folder_before, reverse=True)
+        wait_for(lambda: folder_state()['itemIds'] == folder_descending,
+            'live folder uses descending order')
+        check('folder ordering preserves manual membership and order in settings',
+            parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps')) == app_ids)
         backup = show_layout(snapshot_id)
         check('the sort backup captures the live pre-sort pages',
             backup['appPickerPages'] == before, backup['appPickerPages'])
@@ -2050,17 +2063,19 @@ true;
         check('a full snapshot store preserves the current arrangement',
             result == ('full', '') and live_pages() == after and
             gs_get_at('org.gnome.shell', 'app-picker-layout') == picker and
-            len(snapshot_store()) == 20, result)
+            len(snapshot_store()) == 20 and gs_get('sort-folder-apps') == 'true', result)
         write_snapshot_store([seed])
         check('Shell accepts a request to restore the sort backup', restore_grid(snapshot_id))
         restored = live_pages()
         check('restoring a sorted backup restores each page and turns sorting off',
             restored == before and gs_get('app-grid-sort-order') == "'manual'",
             {'before': before, 'restored': restored, 'mode': gs_get('app-grid-sort-order')})
+        wait_for(lambda: folder_state()['itemIds'] == folder_before,
+            'restoring the sort backup restores the manual folder order')
 
         legacy = dict(seed, id='legacy-sort-backup', settings={
             key: value for key, value in seed['settings'].items()
-            if key not in ('app-grid-sort-order', 'app-grid-folder-position')})
+            if key not in ('app-grid-sort-order', 'app-grid-folder-position', 'sort-folder-apps')})
         write_snapshot_store([legacy])
         eval_js('''
 const display = Main.overview._overview._controls.appDisplay;
@@ -2081,12 +2096,15 @@ true;
         before_ui = live_pages()
         app, frame = launch_prefs_window()
         try:
-            grid_row = wait_for(lambda: atspi_find(app, lambda node:
+            sorting_row = wait_for(lambda: atspi_find(app, lambda node:
                 atspi_role(node) == 'list item' and
-                atspi_name(node) == 'App grid'), 'App grid row')
-            atspi_click(grid_row, frame)
+                atspi_name(node) == 'Application sorting'), 'Application sorting row')
+            atspi_click(sorting_row, frame)
             sort_labels = ('Sort…', 'Sort by name…')
             wait_for(lambda: atspi_find_button(app, sort_labels), 'sort button')
+            consolidation = atspi_wait_label(app, 'Consolidate app pages')
+            check('manual order allows changing the consolidation switch',
+                atspi_sensitive(consolidation))
             prefs_click_button(app, sort_labels, frame)
             dialog = wait_for(lambda: atspi_find(app, lambda node:
                 atspi_role(node) in ('dialog', 'frame') and
@@ -2096,13 +2114,25 @@ true;
                 atspi_name(node) == 'Manual order'), 'manual sort option')
             check('preferences defaults to the manual option',
                 manual.get_state_set().contains(atspi_module().StateType.CHECKED))
+            atspi_wait_label(dialog, 'Also sort apps inside folders')
+            atspi_wait_label(dialog, 'Non-Latin names')
             ascending_option = wait_for(lambda: atspi_find(dialog, lambda node:
                 atspi_role(node) in ('radio button', 'check box') and
                 atspi_name(node) == 'A → Z'), 'ascending sort option')
             atspi_click(ascending_option, dialog)
             sort_action = wait_for(lambda: atspi_find_button(dialog, ('Sort',)), 'apply alphabetical sort')
             atspi_click(sort_action, dialog)
-            atspi_wait_label(app, 'App grid sorted')
+            wait_for(lambda: atspi_find_button(app, ('View backup',)), 'view sort backup button')
+            atspi_wait_label(app, 'Automatically enabled when sorting by name')
+            layout_config = wait_for(lambda: (config := snapshot().get('config')) and
+                config.get('consolidate') and config, 'effective page consolidation')
+            page_counts = [len(page) for page in live_pages()]
+            check('sorting enables consolidation without overwriting the manual preference',
+                gs_get('consolidate-pages') == 'false' and all(
+                    count == layout_config['rows'] * layout_config['columns']
+                    for count in page_counts[:-1]), page_counts)
+            check('preferences omits the successful sort message',
+                atspi_find(app, lambda node: atspi_name(node) == 'App grid sorted') is None)
             store = snapshot_store()
             check('preferences sort saves a backup by default',
                 len(store) == 1 and live_pages() != before_ui and
@@ -2137,20 +2167,49 @@ true;
             prefs_click_button(confirmation, ('Cancel',), frame)
             atspi_wait_dialog_closed(app)
             prefs_click_button(app, ('Back',), frame)
-            atspi_wait_label(app, 'App grid sorted')
+            wait_for(lambda: atspi_find_button(app, sort_labels), 'return to sorting controls')
+            check('restoring the backup re-enables the manual consolidation switch',
+                atspi_sensitive(consolidation))
         finally:
             atspi_invoke(frame, 'window.close')
 
-        sort_grid(True, 'last')
+        sort_grid(True, 'last', sort_folders=True)
         write_test_app(new_app, 'ZZZZ AppGrid Sort Probe')
         wait_for_app(new_app, True, 'new app installed with auto-sort enabled')
         wait_for(lambda: main_item_ids()[0] == new_app, 'new app sorted to the first position')
         check('auto-sort applies the selected order to new apps',
             main_item_ids()[0] == new_app and gs_get('app-grid-sort-order') == "'descending'")
+        gs_set_at(FOLDER_SCHEMA, 'apps', str([*app_ids, new_app]))
+        wait_for(lambda: folder_state()['itemIds'] == [new_app, *folder_descending],
+            'new folder member follows the selected order')
+        gs_set('sort-folder-apps', False)
+        wait_for(lambda: folder_state()['itemIds'] == [*folder_before, new_app],
+            'switching off folder sorting restores the manual folder order')
+        sort_grid(False, 'first', sort_folders=True)
+        wait_for(lambda: folder_state()['itemIds'] == [*sorted(folder_before), new_app],
+            'live folder uses ascending order')
+        sort_grid(False, 'mixed', sort_folders=True, non_latin='first')
+        write_test_app(chinese_app, '中文排序测试')
+        wait_for_app(chinese_app, True, 'new Chinese-named app installed')
+        wait_for(lambda: main_item_ids()[0] == chinese_app,
+            'new Chinese-named app goes to the first group')
+        sort_grid(True, 'mixed', sort_folders=True, non_latin='last')
+        check('descending sorting puts the Chinese-named app in the last group',
+            main_item_ids()[-1] == chinese_app and
+            gs_get('app-grid-non-latin-position') == "'last'")
+        gs_set_at(FOLDER_SCHEMA, 'apps', str([*app_ids, new_app, chinese_app]))
+        wait_for(lambda: folder_state()['itemIds'] == [new_app, *folder_descending, chinese_app],
+            'folder sorting also keeps the Chinese-named app in the last group')
         gs_set('app-grid-sort-order', 'manual')
+        wait_for(lambda: folder_state()['itemIds'] == [*folder_before, new_app, chinese_app],
+            'manual mode restores the manual folder order')
     finally:
-        if (DATA_HOME / 'applications' / new_app).exists():
-            remove_test_app(new_app)
+        gs_set_at(FOLDER_SCHEMA, 'apps', str(app_ids))
+        gs_set('sort-folder-apps', previous_folder_sort)
+        gs_set('app-grid-non-latin-position', previous_non_latin)
+        for app_id in (new_app, chinese_app):
+            if (DATA_HOME / 'applications' / app_id).exists():
+                remove_test_app(app_id)
         gs_set('layout-snapshots', previous_store)
 
 
@@ -2160,6 +2219,24 @@ def check_prefs_ui():
     saved_folder_apps = parse_strv(gs_get_at(FOLDER_SCHEMA, 'apps'))
     app, frame = launch_prefs_window()
     try:
+        home_key, end_key, down_key, return_key = 0xff50, 0xff57, 0xff54, 0xff0d
+
+        def choose_language(current, choice, expected, keys):
+            atspi_click(atspi_wait_label(app, current), frame)
+            atspi_wait_label(app, choice)
+            atspi = atspi_module()
+            for key in (*keys, return_key):
+                atspi.generate_keyboard_event(key, None, atspi.KeySynthType.SYM)
+            wait_for(lambda: gs_get('prefs-language') == repr(expected),
+                f'preferences language {expected}')
+
+        choose_language('Follow system', '简体中文', 'zh_CN', (end_key,))
+        atspi_wait_label(app, '显示应用名称')
+        choose_language('简体中文', 'English', 'en', (home_key, down_key))
+        atspi_wait_label(app, 'Show application names')
+        choose_language('English', 'Follow system', 'system', (home_key,))
+        check('preferences switch languages in place',
+            atspi_name(atspi_wait_label(app, 'Show application names')) == 'Show application names')
         row = wait_for(
             lambda: atspi_find(app, lambda node:
                 atspi_role(node) == 'list item' and
@@ -2287,6 +2364,7 @@ def check_prefs_ui():
             atspi_invoke(frame, 'window.close')
         except Exception:
             pass
+        gs_set('prefs-language', 'system')
         gs_set('layout-snapshots', '')
 
 

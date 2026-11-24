@@ -181,6 +181,8 @@ test('a legacy snapshot returns automatic sorting to manual', () => {
     const settings = new FakeSettings('ext', {
         'app-grid-sort-order': variant('s', "'ascending'"),
         'app-grid-folder-position': variant('s', "'last'"),
+        'sort-folder-apps': variant('b', 'true'),
+        'app-grid-non-latin-position': variant('s', "'last'"),
     })
     restoreSnapshot({
         settings,
@@ -195,6 +197,8 @@ test('a legacy snapshot returns automatic sorting to manual', () => {
     })
     assert.equal(settings.get_value('app-grid-sort-order').print(), "'manual'")
     assert.equal(settings.get_value('app-grid-folder-position').print(), "'mixed'")
+    assert.equal(settings.get_value('sort-folder-apps').print(), 'false')
+    assert.equal(settings.get_value('app-grid-non-latin-position').print(), "'mixed'")
 })
 
 test('a sorted snapshot restores manual order and retains the folder preference', () => {
@@ -210,6 +214,8 @@ test('a sorted snapshot restores manual order and retains the folder preference'
             settings: {
                 'app-grid-sort-order': stored('s', "'ascending'"),
                 'app-grid-folder-position': stored('s', "'first'"),
+                'sort-folder-apps': stored('b', 'true'),
+                'app-grid-non-latin-position': stored('s', "'first'"),
             },
             appPicker: stored('aa{sv}', '[]'),
             folders: {children: [], items: {}},
@@ -218,6 +224,8 @@ test('a sorted snapshot restores manual order and retains the folder preference'
     })
     assert.equal(settings.get_value('app-grid-sort-order').print(), "'manual'")
     assert.equal(settings.get_value('app-grid-folder-position').print(), "'first'")
+    assert.equal(settings.get_value('sort-folder-apps').print(), 'true')
+    assert.equal(settings.get_value('app-grid-non-latin-position').print(), "'first'")
 })
 
 test('two layouts restore their own folder children and grid settings', () => {

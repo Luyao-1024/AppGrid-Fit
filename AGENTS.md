@@ -304,7 +304,8 @@ used for restoration after each `St.ThemeContext` change.
 subsequent pages into earlier unfilled pages. This reduces empty pages when grid density
 increases. It stops when the Shell reports no progress (same page count and no added items),
 so an unsupported `_fillItemVacancies()` cannot loop or claim a change. It only runs when
-`consolidate-pages` is enabled; the setting defaults to false because `_savePages()`
+automatic sorting is active or `consolidate-pages` is enabled in manual mode. The manual
+setting defaults to false because `_savePages()`
 permanently changes the user's application order.
 
 `reflowPages()` always detects pages above the configured capacity. It first calls
@@ -454,11 +455,11 @@ overrides.
 ### Layout
 
 The prefs window uses `Adw.OverlaySplitView` inside a single `Adw.PreferencesGroup`.
-`findDescendant()` raises the page's internal `Adw.Clamp` maximum to 1400 so both panes
-receive their natural width. The default window size is monitor-aware: 480–1240 wide and
+The page's internal clamp fills the window, and the page body applies 24 px margins.
+The default window size is monitor-aware: 480–1240 wide and
 420–660 tall. At 940 px and below, the preview and snapshots open as overlays.
 
-The left pane is a `Gtk.Stack` with a home menu and three subpages. Each subpage has a back
+The left pane is a `Gtk.Stack` with a home menu and four subpages. Each subpage has a back
 header and its own scroller. The right pane pairs those controls with the overview preview,
 folder preview, or saved-layout list. The left navigation calls `showPage(name)` to update
 both stacks. The right pane exposes a close button in drawer mode.
@@ -467,18 +468,19 @@ both stacks. The right pane exposes a close button in drawer mode.
 fillPreferencesWindow(window)
   └─ splitView (Adw.OverlaySplitView, preview at the end)
        ├─ controls (Gtk.Stack)
-       │    ├─ root      — navigation and app-name switch
-       │    ├─ grid      — preset or custom grid controls, sorting and page consolidation
+       │    ├─ root      — navigation, app-name switch and language selector
+       │    ├─ grid      — preset or custom grid controls
        │    ├─ folder    — folder grid controls
+       │    ├─ sorting   — sort dialog launcher, page consolidation and backup status
        │    └─ snapshots — name entry and save controls
        └─ sidebar: compact close button + Gtk.Stack
-            ├─ root   — Cairo overview preview shared by home and App grid
+            ├─ root   — Cairo overview preview shared by home, App grid and Application sorting
             ├─ folder — Cairo folder dialog preview
             └─ snapshots — selectable list and fixed restore/delete footer
 ```
 
 The left stack slides between home and a subpage and fades between subpages. The right
-stack fades in place when its content changes. Home and App grid share the overview
+stack fades in place when its content changes. Home, App grid and Application sorting share the overview
 preview. The back button returns from Layout snapshots to the page that opened it.
 On a narrow window, the drawer can be dismissed independently of the selected page.
 
@@ -488,8 +490,9 @@ Each subpage is a `Gtk.Box` holding a back header (`go-previous-symbolic` flat b
 `activated`. `updateRootRows()` refreshes
 the root subtitles from the preset/custom, folder and snapshot settings.
 
-`fillPreferencesWindow` collects cleanup functions from both panes and invokes them once
-from the window's `close-request` signal. Every signal is disconnected from its owner.
+`fillPreferencesWindow` cleans up both panes when the window closes or changes language.
+The language selector rebuilds both panes in place using system gettext, English source
+strings, or the packaged Chinese catalog. `prefs-language` is independent of snapshots.
 
 ### Shared helpers
 
@@ -590,10 +593,11 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 
 ## GSettings Schema
 
-18 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
+23 keys in `schemas/org.gnome.shell.extensions.appgrid-size.gschema.xml`:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
+| `prefs-language` | string | `system` | `system`, `en`, `zh_CN` |
 | `use-presets` | bool | `true` | — |
 | `preset-level` | int | `1` | 0–3 |
 | `consolidate-pages` | bool | `false` | — |
@@ -610,6 +614,10 @@ updating on `picture-uri`/`picture-uri-dark` changes and dark mode toggles.
 | `folder-edge-padding-auto` | bool | `true` | — |
 | `folder-edge-padding` | int | `24` | 0–96 (used when automatic is off) |
 | `show-app-names` | bool | `true` | — |
+| `app-grid-sort-order` | string | `manual` | `manual`, `ascending`, `descending` |
+| `app-grid-folder-position` | string | `mixed` | `mixed`, `first`, `last` |
+| `app-grid-non-latin-position` | string | `mixed` | `mixed`, `first`, `last` |
+| `sort-folder-apps` | bool | `false` | — |
 | `layout-snapshots` | string | `''` | Internal JSON snapshot store |
 | `runtime-preview-layout` | string | `''` | Internal live Shell layout snapshot for the preview |
 

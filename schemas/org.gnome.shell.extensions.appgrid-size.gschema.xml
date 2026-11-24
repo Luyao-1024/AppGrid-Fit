@@ -3,6 +3,16 @@
   <schema id="org.gnome.shell.extensions.appgrid-size"
     path="/org/gnome/shell/extensions/appgrid-size/">
 
+    <key type="s" name="prefs-language">
+      <choices>
+        <choice value="system"/>
+        <choice value="en"/>
+        <choice value="zh_CN"/>
+      </choices>
+      <default>'system'</default>
+      <summary>Language of the preferences window</summary>
+    </key>
+
     <key type="b" name="use-presets">
       <default>true</default>
       <summary>Use preset sizes</summary>
@@ -19,7 +29,7 @@
     <key type="b" name="consolidate-pages">
       <default>false</default>
       <summary>Consolidate app pages</summary>
-      <description>Fill vacancies on earlier pages and persist the resulting app order.</description>
+      <description>Fill vacancies on earlier pages in manual order and persist the resulting app order. Sorting by name always fills earlier pages.</description>
     </key>
 
     <key type="i" name="custom-icon-size">
@@ -124,10 +134,25 @@
       <summary>Folder position when sorting the application grid</summary>
     </key>
 
+    <key type="s" name="app-grid-non-latin-position">
+      <choices>
+        <choice value="mixed"/>
+        <choice value="first"/>
+        <choice value="last"/>
+      </choices>
+      <default>'mixed'</default>
+      <summary>Position of names beginning with non-Latin letters when sorting</summary>
+    </key>
+
     <key type="s" name="layout-snapshots">
       <default>''</default>
       <summary>Saved layout snapshots</summary>
       <description>Internal JSON storage for user-saved layout snapshots.</description>
+    </key>
+
+    <key type="b" name="sort-folder-apps">
+      <default>false</default>
+      <summary>Apply alphabetical sorting inside application folders</summary>
     </key>
 
     <key type="s" name="runtime-preview-layout">
